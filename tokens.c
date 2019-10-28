@@ -4,7 +4,7 @@
 #include "tokens.h"
 #include "loglog.h"
 #include "ecc256/ripemd160.h"
-#include "ecc256/sha256.h"
+#include "virtmach.h"
 
 static const int LENOVO = 168;
 static const int PCWANT = 168;
@@ -94,7 +94,7 @@ int etoken_expired(const struct etoken *et)
 	return 0;
 }
 
-struct etoken *etoken_new(unsigned long value, int subtype, const char *desc,
+struct etoken *etoken_new(int subtype, const char *desc,
 		const struct etk_option *opts)
 {
 	struct etoken *et;
@@ -104,15 +104,17 @@ struct etoken *etoken_new(unsigned long value, int subtype, const char *desc,
 	optlen = option_length(opts);
 	tlen = sizeof(struct etoken) + optlen;
 	et = malloc(tlen);
-	check_pointer(et);
+	if (!check_pointer(et, LOG_ERR, "Out of Memory"))
+		return NULL;
 	memset(et, 0, tlen);
 	et->ver = ETK_VERSION;
+	et->subver = ETK_SUB_VERSION;
 	et->hlen = sizeof(struct etoken);
 	etoken_set_vendor(et, LENOVO, PCWANT);
 	etoken_set_subtype(et, subtype, desc);
-	et->value = value;
 	clock_gettime(CLOCK_REALTIME, &tm);
 	et->tm = tm.tv_sec;
+	et->xfercnt = 0xffffu;
 	et->optlen = optlen;
 	etoken_set_options(et, opts);
 
@@ -125,9 +127,10 @@ struct etoken *etoken_clone(const struct etoken *et, unsigned long value)
 	int len;
 	struct timespec tm;
 
-	len = et->hlen + option_length(et->options);
+	len = etoken_length(et);
 	etn = malloc(len);
-	check_pointer(etn);
+	if (!check_pointer(etn, LOG_CRIT, "Out of Memory!\n"))
+		return NULL;
 	memcpy(etn, et, len);
 	etn->locklen = 0;
 	etn->lockscript = NULL;
@@ -146,58 +149,54 @@ int etoken_lock(struct etoken *et, int locklen, const BYTE *lockscript)
 
 	if (et->lockscript != NULL)
 		return 0;
-	et->locklen = locklen;
 	et->lockscript = malloc(locklen);
-	check_pointer(et->lockscript);
+	if (!check_pointer(et->lockscript, LOG_CRIT, nomem))
+		return 0;
+	et->locklen = locklen;
 	memcpy(et->lockscript, lockscript, locklen);
-	len = et->hlen + et->optlen + locklen;
+	len = etoken_length(et) + locklen;
 	buf = malloc(len);
-	check_pointer(buf);
+	if (!check_pointer(buf, LOG_CRIT, nomem))
+		goto err_10;
 	memcpy(buf, et, len - locklen);
 	((struct etoken *)buf)->lockscript = NULL;
 	memcpy(buf+len-locklen, lockscript, locklen);
 	ripe = ripemd160_init();
-	check_pointer(ripe);
+	if (!check_pointer(ripe, LOG_CRIT, nomem))
+		goto err_20;
 	ripemd160_dgst(ripe, buf, len);
-	memcpy(et->id, ripe->H, 20);
+	memcpy(et->id, ripe->H, RIPEMD_LEN);
 	ripemd160_exit(ripe);
 	free(buf);
 	return 1;
-}
 
-static void etoken_sha256(BYTE dgst[SHA256_ID_LEN], const struct etoken *et)
-{
-	struct sha256 *sha;
-
-	sha = sha256_init();
-	check_pointer(sha);
-	sha256(sha, (const BYTE *)et, et->hlen+et->optlen);
-	memcpy(dgst, sha->H, SHA256_ID_LEN);
-	sha256_exit(sha);
-}
-
-#define OPERAND		0x80
-#define SHA256_DIGEST	(OPERAND|0x01)
-
-static inline int virt_exec(const BYTE *script, int len)
-{
-	return 1; /* always true */
+err_20:
+	free(buf);
+err_10:
+	free(et->lockscript);
+	et->lockscript = NULL;
+	et->locklen = 0;
+	return 0;
 }
 
 int etoken_unlock(const struct etoken *et, int unlen, const BYTE *unlock)
 {
-	BYTE *buf, *sha, *script;
+	BYTE *buf;
 	int retv;
+	struct vmach *vm;
 
-	buf = malloc(et->locklen + unlen + SHA256_ID_LEN);
-	check_pointer(buf);
-	sha = buf + 1;
-	script = buf + SHA256_ID_LEN + 1;
-	memcpy(script, unlock, unlen);
+	buf = malloc(et->locklen + unlen);
+	if (!check_pointer(buf, LOG_CRIT, nomem))
+		return 0;
+	memcpy(buf, unlock, unlen);
 	memcpy(buf+unlen, et->lockscript, et->locklen);
-	buf[0] = SHA256_DIGEST;
-	etoken_sha256(sha, et);
-	retv = virt_exec(buf, unlen + et->locklen);
+	vm = vmach_init(et->id, RIPEMD_LEN);
+	if (!check_pointer(vm, LOG_CRIT, nomem)) {
+		free(buf);
+		return 0;
+	}
+	retv = vmach_execute(vm, buf, unlen + et->locklen);
+	vmach_exit(vm);
 	free(buf);
 	return retv;
 }
