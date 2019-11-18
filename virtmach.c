@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdlib.h>
+#include <assert.h>
 #include "loglog.h"
 #include "virtmach.h"
 #include "base64.h"
@@ -8,7 +9,7 @@
 #define VMACH_SCRATCH	8192
 #define VMACH_BUFLEN	2097152
 
-struct vmach *vmach_init(const unsigned char *dgst, int len)
+struct vmach *vmach_init(const unsigned char *msg, int len)
 {
 	struct vmach *vm;
 	int i, chunk_len;
@@ -32,8 +33,8 @@ struct vmach *vmach_init(const unsigned char *dgst, int len)
 			vm->bufpos = 0;
 			for (i = 0; i < VMACH_STACK_SIZE; i++)
 				vm->stack[i] = NULL;
-			vm->dgstlen = len;
-			memcpy(vm->dgst, dgst, len);
+			vm->msglen = len;
+			vm->msg = msg;
 		}
 	}
 	return vm;
@@ -137,8 +138,6 @@ static int vmach_ripemd160(struct vmach *vm)
 {
 	int spos, msglen;
 	unsigned char *msg, *ct;
-	struct ecc_key *ecckey;
-	char *keystr;
 
 	if (vmach_stack_empty(vm))
 		return -ENOMEM;
@@ -146,20 +145,51 @@ static int vmach_ripemd160(struct vmach *vm)
 	ct = vm->stack[spos];
 	msglen = *ct;
 	msg = ct + 1;
-	keystr = vm->scratch;
-	ecckey = vm->scratch + msglen + 1;
-	memcpy(keystr, msg, msglen);
-	keystr[msglen] = 0;
-	ecc_key_import(ecckey, keystr);
-	ripemd160_dgst(vm->ripe, (void *)ecckey->px, ECCKEY_INT_LEN*8);
+	ripemd160_dgst(vm->ripe, (void *)msg, msglen-1);
 	vm->bufpos -= (msglen + 1);
 	msglen = bignum2str_b64((char *)msg, vm->buflen - vm->bufpos,
 			vm->ripe->H, RIPEMD_LEN/4);
+	assert(msglen < vm->buflen - vm->bufpos);
 	*ct = msglen + 1;
-	msg[msglen] = 0;
 	ripemd160_reset(vm->ripe);
 	vm->bufpos += (msglen + 2);
 	return 0;
+}
+
+static int vmach_checksig(struct vmach *vm)
+{
+	int retv = 0, msglen, spos;
+	const char *msg;
+	struct ecc_key *ekey;
+	struct ecc_sig *esig;
+
+	if (vmach_stack_empty(vm))
+		return 1;
+	ekey = vm->scratch;
+	esig = vm->scratch + sizeof(struct ecc_key);
+	spos = vm->top;
+	msg = vm->stack[spos];
+	msglen = *msg;
+	assert(msg[msglen-1] == 0);
+	vm->stack[spos] = NULL;
+	vm->top++;
+	vm->bufpos -= (msglen + 1);
+	retv = ecc_key_import(ekey, msg+1);
+	if (retv || vmach_stack_empty(vm))
+		return 1;
+
+	spos = vm->top;
+	msg = vm->stack[spos];
+	msglen = *msg;
+	assert(msg[msglen-1] == 0);
+	vm->stack[spos] = NULL;
+	vm->top++;
+	vm->bufpos -= (msglen + 1);
+	retv = ecc_str2sig(esig, msg+1);
+	if (retv)
+		return retv;
+	retv = ecc_verify(esig, ekey, vm->msg, vm->msglen);
+	return retv;
 }
 
 int cmd_execute(struct vmach *vm, unsigned char cmd)
@@ -179,6 +209,9 @@ int cmd_execute(struct vmach *vm, unsigned char cmd)
 	case OP_CHECKSIG:
 		retv = vmach_checksig(vm);
 		break;
+	case OP_NOP:
+		retv = 0;
+		break;
 	default:
 		retv = -1;
 	}
@@ -194,6 +227,8 @@ int vmach_execute(struct vmach *vm, const unsigned char *script, int len)
 	do {
 		if ((*token & 0x80)) {
 			retv = cmd_execute(vm, *token);
+			pos += 1;
+			token += 1;
 		} else {
 			len = *token;
 			retv = vmach_pushdata(vm, token+1, len);

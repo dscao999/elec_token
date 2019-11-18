@@ -6,9 +6,6 @@
 #include "ecc256/ripemd160.h"
 #include "virtmach.h"
 
-static const int LENOVO = 168;
-static const int PCWANT = 168;
-
 static inline struct etk_option *next_option(struct etk_option *opt)
 {
 	void *nx_opt;
@@ -33,13 +30,6 @@ static inline int option_length(const struct etk_option *copts)
 		copts = cnext_option(copts);
 	}
 	return len + sizeof(struct etk_option);
-}
-
-void etoken_set_subtype(struct etoken *et, int sub, const char *desc)
-{
-	et->subtype = sub;
-	memset(et->desc, 0, 12);
-	strncpy((char *)et->desc, desc, 12);
 }
 
 void etoken_set_options(struct etoken *et, const struct etk_option *copt)
@@ -72,8 +62,6 @@ int etoken_equiv(const struct etoken *etl, const struct etoken *etr)
 		return 0;
 	if (etl->subtype != etr->subtype)
 		return 0;
-	if (memcmp(etl->desc, etr->desc, 12) != 0)
-		return 0;
 	if (etl->optlen != etr->optlen)
 		return 0;
 	if (memcmp(etl->options, etr->options, etl->optlen) != 0)
@@ -86,15 +74,13 @@ int etoken_expired(const struct etoken *et)
 {
 	struct timespec tm;
 
-	if (et->expire == 0)
-		return 0;
 	clock_gettime(CLOCK_REALTIME, &tm);
 	if (et->expire < tm.tv_sec)
 		return 1;
 	return 0;
 }
 
-struct etoken *etoken_new(int subtype, const char *desc,
+struct etoken *etoken_new(int vendor, int type, int subtype,
 		const struct etk_option *opts)
 {
 	struct etoken *et;
@@ -110,11 +96,10 @@ struct etoken *etoken_new(int subtype, const char *desc,
 	et->ver = ETK_VERSION;
 	et->subver = ETK_SUB_VERSION;
 	et->hlen = sizeof(struct etoken);
-	etoken_set_vendor(et, LENOVO, PCWANT);
-	etoken_set_subtype(et, subtype, desc);
+	etoken_set_type(et, vendor, type, subtype);
 	clock_gettime(CLOCK_REALTIME, &tm);
 	et->tm = tm.tv_sec;
-	et->xfercnt = 0xffffu;
+	et->expire = tm.tv_sec + 100*365*24*3600ul;
 	et->optlen = optlen;
 	etoken_set_options(et, opts);
 

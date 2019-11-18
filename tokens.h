@@ -22,10 +22,8 @@ struct etoken {
 	BYTE id[RIPEMD_ID_LEN];
 	HALFW vendor;
 	HALFW type;
-	HALFW hlen;
-
 	HALFW subtype;
-	BYTE desc[12];
+	HALFW hlen;
 
 	LONGW value;
 	LONGW tm;
@@ -36,8 +34,6 @@ struct etoken {
 
 	BYTE ver;
 	BYTE subver;
-	HALFW xfercnt;
-	HALFW xfer_flag;
 	HALFW optlen;
 	struct etk_option options[0];
 };
@@ -47,18 +43,18 @@ static inline int etoken_length(const struct etoken *et)
 	return et->hlen + et->optlen;
 }
 
-static inline void etoken_set_vendor(struct etoken *et, int vendor, int type)
+static inline void etoken_set_type(struct etoken *et, int vendor, int type,
+		int subtype)
 {
 	et->vendor = vendor;
 	et->type = type;
+	et->subtype = subtype;
 }
 
 static inline void etoken_set_value(struct etoken *et, unsigned long value)
 {
 	et->value = value;
 }
-
-void etoken_set_subtype(struct etoken *et, int sub, const char *desc);
 
 void etoken_set_options(struct etoken *et, const struct etk_option *opts);
 
@@ -71,7 +67,7 @@ int etoken_expired(const struct etoken *et);
 
 int etoken_equiv(const struct etoken *etl, const struct etoken *etr);
 
-struct etoken *etoken_new(int subtype, const char *desc,
+struct etoken *etoken_new(int vendor, int type, int subtype,
 		const struct etk_option *opts);
 
 struct etoken *etoken_clone(const struct etoken *et, unsigned long value);
