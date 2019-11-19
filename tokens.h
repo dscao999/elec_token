@@ -9,9 +9,10 @@
 
 #define ETK_VERSION 1
 #define ETK_SUB_VERSION 0
-#define RIPEMD_ID_LEN	20
-#define SHA256_ID_LEN	32
 
+enum OPTION {
+	PAYTO = 0xf0, ENDUSER = 0x10, TKSER = 0xe0, ENDOPT = 0xff
+};
 struct etk_option {
 	BYTE id;
 	BYTE len;
@@ -19,7 +20,6 @@ struct etk_option {
 };
 
 struct etoken {
-	BYTE id[RIPEMD_ID_LEN];
 	HALFW vendor;
 	HALFW type;
 	HALFW subtype;
@@ -29,7 +29,7 @@ struct etoken {
 	LONGW tm;
 	LONGW expire;
 
-	BYTE *lockscript;
+	HALFW lockoff;
 	HALFW locklen;
 
 	BYTE ver;
@@ -41,6 +41,18 @@ struct etoken {
 static inline int etoken_length(const struct etoken *et)
 {
 	return et->hlen + et->optlen;
+}
+static inline int etoken_sum_len(const struct etoken *et, int num)
+{
+	const struct etoken *etn = et;;
+	int sumlen = 0, i, len;
+
+	for (i = 0; i < num; i++) {
+		len = etoken_length(et);
+		sumlen += len;
+		etn = ((const void *)etn) + len;
+	}
+	return sumlen;
 }
 
 static inline void etoken_set_type(struct etoken *et, int vendor, int type,
@@ -56,7 +68,7 @@ static inline void etoken_set_value(struct etoken *et, unsigned long value)
 	et->value = value;
 }
 
-void etoken_set_options(struct etoken *et, const struct etk_option *opts);
+int etoken_option_insert(struct etoken **pet, const struct etk_option *copt);
 
 static inline void etoken_set_expire(struct etoken *et, int days)
 {
@@ -65,23 +77,17 @@ static inline void etoken_set_expire(struct etoken *et, int days)
 
 int etoken_expired(const struct etoken *et);
 
-int etoken_equiv(const struct etoken *etl, const struct etoken *etr);
+int etoken_equiv_type(const struct etoken *etl, const struct etoken *etr);
 
-struct etoken *etoken_new(int vendor, int type, int subtype,
-		const struct etk_option *opts);
-
+struct etoken *etoken_new(int vendor, int type, int subtype, unsigned long v);
 struct etoken *etoken_clone(const struct etoken *et, unsigned long value);
 
 void etoken_destroy(struct etoken *et)
 {
-	if (et) {
-		if (et->lockscript)
-			free(et->lockscript);
+	if (et)
 		free(et);
-	}
 }
 
-int etoken_lock(struct etoken *et, int locklen, const BYTE *lockscript);
-int etoken_unlock(const struct etoken *et, int unlen, const BYTE *unlock);
+int etoken_lock(struct etoken **pet, int locklen, const BYTE *lockscript);
 
 #endif  /* TOKENS_DSCAO__ */
