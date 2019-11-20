@@ -42,18 +42,6 @@ static inline int etoken_length(const struct etoken *et)
 {
 	return et->hlen + et->optlen;
 }
-static inline int etoken_sum_len(const struct etoken *et, int num)
-{
-	const struct etoken *etn = et;;
-	int sumlen = 0, i, len;
-
-	for (i = 0; i < num; i++) {
-		len = etoken_length(et);
-		sumlen += len;
-		etn = ((const void *)etn) + len;
-	}
-	return sumlen;
-}
 
 static inline void etoken_set_type(struct etoken *et, int vendor, int type,
 		int subtype)

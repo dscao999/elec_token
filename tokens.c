@@ -70,14 +70,8 @@ int etoken_option_insert(struct etoken **pet, const struct etk_option *copt)
 
 	optn->id = opt->id;
 	optn->len = opt->len;
-	et = realloc(et, nlen);
-	if (!check_pointer(et, LOG_CRIT, nomem)) {
-		free(etn);
-		return -ENOMEM;
-	}
-	memcpy(et, etn, nlen);
-	free(etn);
-	*pet = et;
+	free(et);
+	*pet = etn;
 	return 0;
 }
 
@@ -154,7 +148,7 @@ struct etoken *etoken_clone(const struct etoken *et, unsigned long value)
 int etoken_lock(struct etoken **pet, int locklen, const BYTE *lockscript)
 {
 	struct etoken *etn, *et = *pet;
-	int len;
+	int len, rem;
 	void *lockbuf;
 
 	if (et->lockoff != 0) {
@@ -162,24 +156,21 @@ int etoken_lock(struct etoken **pet, int locklen, const BYTE *lockscript)
 		return 1;
 	}
 
-	assert((locklen & 1) == 0);
 	len = et->hlen + et->optlen + locklen;
+	rem = len & 7;
+	len = (((len - 1) >> 3) + 1) << 3;
 	etn = malloc(len);
 	if (!check_pointer(etn, LOG_CRIT, nomem))
 		return -ENOMEM;
 
 	memcpy(etn, et, et->hlen + et->optlen);
-	etn->locklen = locklen;
 	etn->lockoff = et->hlen + et->optlen;
 	lockbuf = ((void *)etn) + et->lockoff;
 	memcpy(lockbuf, lockscript, locklen);
-	et = realloc(et, len);
-	if (!check_pointer(et, LOG_CRIT, nomem)) {
-		free(etn);
-		return -ENOMEM;
-	}
-	memcpy(et, etn, len);
-	free(etn);
-	*pet = et;
+	if (rem)
+		memset(lockbuf+locklen, 0x81, 8 - rem);
+	etn->locklen = len - et->hlen - et->optlen;
+	free(et);
+	*pet = etn;
 	return 0;
 }
