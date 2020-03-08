@@ -9,13 +9,10 @@
 #define VMACH_SCRATCH	8192
 #define VMACH_BUFLEN	2097152
 
-struct vmach *vmach_init(const unsigned char *msg, int len)
+struct vmach *vmach_init(void)
 {
 	struct vmach *vm;
 	int i, chunk_len;
-
-	if (len > 128)
-		return NULL;
 
 	chunk_len = VMACH_BUFLEN + VMACH_SCRATCH + sizeof(struct vmach);
 	vm = mmap(NULL, chunk_len, PROT_READ|PROT_WRITE,
@@ -33,8 +30,6 @@ struct vmach *vmach_init(const unsigned char *msg, int len)
 			vm->bufpos = 0;
 			for (i = 0; i < VMACH_STACK_SIZE; i++)
 				vm->stack[i] = NULL;
-			vm->msglen = len;
-			vm->msg = msg;
 		}
 	}
 	return vm;
@@ -156,7 +151,8 @@ static int vmach_ripemd160(struct vmach *vm)
 	return 0;
 }
 
-static int vmach_checksig(struct vmach *vm)
+static int vmach_checksig(struct vmach *vm, const unsigned char *array,
+		int array_len)
 {
 	int retv = 0, msglen, spos;
 	const char *msg;
@@ -170,7 +166,7 @@ static int vmach_checksig(struct vmach *vm)
 	spos = vm->top;
 	msg = vm->stack[spos];
 	msglen = *msg;
-	assert(msg[msglen-1] == 0);
+	assert(msg[msglen] == 0);
 	vm->stack[spos] = NULL;
 	vm->top++;
 	vm->bufpos -= (msglen + 1);
@@ -181,18 +177,19 @@ static int vmach_checksig(struct vmach *vm)
 	spos = vm->top;
 	msg = vm->stack[spos];
 	msglen = *msg;
-	assert(msg[msglen-1] == 0);
+	assert(msg[msglen] == 0);
 	vm->stack[spos] = NULL;
 	vm->top++;
 	vm->bufpos -= (msglen + 1);
 	retv = ecc_str2sig(esig, msg+1);
 	if (retv)
 		return retv;
-	retv = ecc_verify(esig, ekey, vm->msg, vm->msglen);
+	retv = ecc_verify(esig, ekey, array, array_len);
 	return retv;
 }
 
-int cmd_execute(struct vmach *vm, unsigned char cmd)
+int cmd_execute(struct vmach *vm, unsigned char cmd,
+		const unsigned char *array, int array_len)
 {
 	int retv = 0;
 
@@ -207,7 +204,7 @@ int cmd_execute(struct vmach *vm, unsigned char cmd)
 		retv = vmach_ripemd160(vm);
 		break;
 	case OP_CHECKSIG:
-		retv = vmach_checksig(vm);
+		retv = vmach_checksig(vm, array, array_len);
 		break;
 	case OP_NOP:
 		retv = 0;
@@ -218,7 +215,8 @@ int cmd_execute(struct vmach *vm, unsigned char cmd)
 	return retv;
 }
 
-int vmach_execute(struct vmach *vm, const unsigned char *script, int len)
+int vmach_execute(struct vmach *vm, const unsigned char *script, int len,
+		const unsigned char *array, int array_len)
 {
 	int retv = 0, pos = 0;
 	const unsigned char *token;
@@ -226,7 +224,7 @@ int vmach_execute(struct vmach *vm, const unsigned char *script, int len)
 	token = script;
 	do {
 		if ((*token & 0x80)) {
-			retv = cmd_execute(vm, *token);
+			retv = cmd_execute(vm, *token, array, array_len);
 			pos += 1;
 			token += 1;
 		} else {
@@ -236,8 +234,5 @@ int vmach_execute(struct vmach *vm, const unsigned char *script, int len)
 			token += len + 1;
 		}
 	} while (pos < len && retv == 0);
-	if (retv != 0 || !vmach_stack_empty(vm))
-		retv = 1;
-
 	return retv;
 }

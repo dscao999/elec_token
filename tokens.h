@@ -7,11 +7,8 @@
 #define WORD unsigned int
 #define LONGW unsigned long
 
-#define ETK_VERSION 1
-#define ETK_SUB_VERSION 0
-
 enum OPTION {
-	PAYTO = 0xf0, ENDUSER = 0x10, TKSER = 0xe0, ENDOPT = 0xff
+	TKSER = 0x01, ENDUSER = 0x10
 };
 struct etk_option {
 	BYTE id;
@@ -20,62 +17,26 @@ struct etk_option {
 };
 
 struct etoken {
-	HALFW vendor;
-	HALFW type;
-	HALFW subtype;
-	HALFW hlen;
-
 	LONGW value;
-	LONGW tm;
 	LONGW expire;
-
-	HALFW lockoff;
-	HALFW locklen;
-
-	BYTE ver;
-	BYTE subver;
-	HALFW optlen;
+	WORD token;
+	WORD numopts;
 	struct etk_option options[0];
 };
 
-static inline int etoken_length(const struct etoken *et)
-{
-	return et->hlen + et->optlen;
-}
+int etoken_optlen(const struct etk_option *copts, int numopts);
 
-static inline void etoken_set_type(struct etoken *et, int vendor, int type,
-		int subtype)
-{
-	et->vendor = vendor;
-	et->type = type;
-	et->subtype = subtype;
-}
-
-static inline void etoken_set_value(struct etoken *et, unsigned long value)
-{
-	et->value = value;
-}
-
-int etoken_option_insert(struct etoken **pet, const struct etk_option *copt);
-
-static inline void etoken_set_expire(struct etoken *et, int days)
-{
-	et->expire = et->tm + days*24*3600;
+static inline int etoken_length(const struct etoken *et) {
+	return sizeof(struct etoken) + etoken_optlen(et->options, et->numopts);
 }
 
 int etoken_expired(const struct etoken *et);
 
-int etoken_equiv_type(const struct etoken *etl, const struct etoken *etr);
+void etoken_init(struct etoken *et, WORD token, LONGW value, int days,
+		int numopts, const struct etk_option *opts);
+struct etoken *etoken_clone(const struct etoken *et, LONGW value);
 
-struct etoken *etoken_new(int vendor, int type, int subtype, unsigned long v);
-struct etoken *etoken_clone(const struct etoken *et, unsigned long value);
-
-void etoken_destroy(struct etoken *et)
-{
-	if (et)
-		free(et);
-}
-
-int etoken_lock(struct etoken **pet, int locklen, const BYTE *lockscript);
+struct etoken *etoken_new(WORD token, LONGW value, int days, int numopts,
+		const struct etk_option *opts);
 
 #endif  /* TOKENS_DSCAO__ */

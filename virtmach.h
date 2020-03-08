@@ -14,13 +14,12 @@ struct vmach {
 	int top;
 	struct ripemd160 *ripe;
 	void *stack[VMACH_STACK_SIZE];
-	int msglen, bufpos, buflen;
-	const unsigned char *msg;
+	int bufpos, buflen;
 	void *scratch;
 	unsigned char buf[0];
 };
 
-struct vmach *vmach_init(const unsigned char *msg, int len);
+struct vmach *vmach_init(void);
 
 static inline void vmach_exit(struct vmach *vm)
 {
@@ -39,5 +38,6 @@ static inline int vmach_stack_full(const struct vmach *vm)
 	return vm->top == 0;
 }
 
-int vmach_execute(struct vmach *vm, const unsigned char *script, int len);
+int vmach_execute(struct vmach *vm, const unsigned char *script, int len,
+		const unsigned char *array, int array_len);
 #endif /* VIRTMACH_DSCAO__ */

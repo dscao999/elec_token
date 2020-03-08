@@ -13,6 +13,7 @@ static inline struct etk_option *next_option(struct etk_option *opt)
 	assert(nx_opt->id > opt->id);
 	return nx_opt;
 }
+
 static inline const struct etk_option *cnext_option(const struct etk_option *opt)
 {
 	const struct etk_option *nx_opt;
@@ -22,73 +23,16 @@ static inline const struct etk_option *cnext_option(const struct etk_option *opt
 	return nx_opt;
 }
 
-static inline int option_length(const struct etk_option *copts)
+int etoken_optlen(const struct etk_option *opts, int numopts)
 {
+	const struct etk_option *copt = opts;
 	int len = 0;
 
-	while (copts->id != ENDOPT) {
-		len += sizeof(struct etk_option) + copts->len;
-		copts = cnext_option(copts);
+	while (numopts--) {
+		len += sizeof(struct etk_option) + copt->len;
+		copt = cnext_option(copt);
 	}
-	return len + sizeof(struct etk_option);
-}
-
-int etoken_option_insert(struct etoken **pet, const struct etk_option *copt)
-{
-	struct etk_option *optn, *opt;
-	struct etoken *etn, *et = *pet;
-	int optsiz, nlen;
-
-	if (et->locklen != 0)
-		return -ENOSPACE;
-	optsiz = copt->len + 2;
-	nlen =  et->hlen + et->optlen + optsiz;
-	etn = malloc(nlen);
-	if (!check_pointer(etn, LOG_CRIT, nomem))
-		return -ENOMEM;
-	memcpy(etn, et, et->hlen);
-	optn = etn->options;
-	opt = et->options;
-	while (opt->id < copt->id && opt->id != ENDOPT) {
-		optn->id = opt->id;
-		optn->len = opt->len;
-		memcpy(optn->desc, opt->desc, opt->len);
-		opt = next_option(opt);
-		optn = next_option(optn);
-	}
-	optn->id = copt->id;
-	optn->len = copt->len;
-	memcpy(optn->desc, copt->desc, copt->len);
-	optn = next_option(optn);
-	while (opt->id != ENDOPT) {
-		optn->id = opt->id;
-		optn->len = opt->len;
-		memcpy(optn->desc, opt->desc, opt->len);
-		opt = next_option(opt);
-		optn = next_option(optn);
-	}
-
-	optn->id = opt->id;
-	optn->len = opt->len;
-	free(et);
-	*pet = etn;
-	return 0;
-}
-
-int etoken_equiv_type(const struct etoken *etl, const struct etoken *etr)
-{
-	if (etl->ver != etr->ver)
-		return 0;
-	if (etl->vendor != etr->vendor)
-		return 0;
-	if (etl->type != etr->type)
-		return 0;
-	if (etl->hlen != etr->hlen)
-		return 0;
-	if (etl->subtype != etr->subtype)
-		return 0;
-
-	return 1;
+	return len;
 }
 
 int etoken_expired(const struct etoken *et)
@@ -101,76 +45,47 @@ int etoken_expired(const struct etoken *et)
 	return 0;
 }
 
-struct etoken *etoken_new(int vendor, int type, int subtype, unsigned long v)
+struct etoken *etoken_new(WORD token, LONGW value, int days, int numopts,
+		const struct etk_option *opts)
 {
 	struct etoken *et;
-	int tlen, optlen;
-	struct timespec tm;
 
-	optlen = 2;
-	tlen = sizeof(struct etoken) + optlen;
-	et = malloc(tlen);
-	if (!check_pointer(et, LOG_ERR, nomem))
-		return NULL;
-	memset(et, 0, tlen);
-	et->ver = ETK_VERSION;
-	et->subver = ETK_SUB_VERSION;
-	et->hlen = sizeof(struct etoken);
-	etoken_set_type(et, vendor, type, subtype);
-	clock_gettime(CLOCK_REALTIME, &tm);
-	et->tm = tm.tv_sec;
-	et->expire = tm.tv_sec + 100*365*24*3600ul;
-	et->value = v;
-	et->optlen = optlen;
-	et->options[0].id = ENDOPT;
+	et = malloc(sizeof(struct etoken) + etoken_optlen(opts, numopts));
+	if (!et)
+		return et;
+	etoken_init(et, token, value, days, numopts, opts);
 	return et;
 }
 
-struct etoken *etoken_clone(const struct etoken *et, unsigned long value)
+void etoken_init(struct etoken *et, WORD token, LONGW value, int days,
+		int numopts, const struct etk_option *opts)
 {
-	struct etoken *etn;
-	int len;
 	struct timespec tm;
+	int optlen;
 
-	len = etoken_length(et);
-	etn = malloc(len);
-	if (!check_pointer(etn, LOG_CRIT, nomem))
-		return NULL;
-	memcpy(etn, et, len);
-	etn->locklen = 0;
-	etn->lockoff = 0;
-	etn->value = value;
+	et->token = token;
+	et->value = et->value;
+	et->numopts = numopts;
+	optlen = etoken_optlen(opts, numopts);
+	memcpy(et->options, opts, optlen);
+
 	clock_gettime(CLOCK_REALTIME, &tm);
-	etn->tm = tm.tv_sec;
-	return etn;
+	if (days == 0)
+		et->expire = tm.tv_sec + 3650*24*3600;
+	else
+		et->expire = tm.tv_sec + days*24*3600;
 }
 
-int etoken_lock(struct etoken **pet, int locklen, const BYTE *lockscript)
+struct etoken *etoken_clone(const struct etoken *cet, LONGW value)
 {
-	struct etoken *etn, *et = *pet;
-	int len, rem;
-	void *lockbuf;
+	struct etoken *et;
 
-	if (et->lockoff != 0) {
-		logmsg(LOG_ERR, "Already locked!\n");
-		return 1;
-	}
+	et = malloc(sizeof(struct etoken) +
+			etoken_optlen(cet->options, cet->numopts));
+	if (!et)
+		return et;
 
-	len = et->hlen + et->optlen + locklen;
-	rem = len & 7;
-	len = (((len - 1) >> 3) + 1) << 3;
-	etn = malloc(len);
-	if (!check_pointer(etn, LOG_CRIT, nomem))
-		return -ENOMEM;
-
-	memcpy(etn, et, et->hlen + et->optlen);
-	etn->lockoff = et->hlen + et->optlen;
-	lockbuf = ((void *)etn) + et->lockoff;
-	memcpy(lockbuf, lockscript, locklen);
-	if (rem)
-		memset(lockbuf+locklen, 0x81, 8 - rem);
-	etn->locklen = len - et->hlen - et->optlen;
-	free(et);
-	*pet = etn;
-	return 0;
+	*et = *cet;
+	et->value = value;
+	return et;
 }
