@@ -3,6 +3,8 @@
 #include "sha256.h"
 #include "ecc_secp256k1.h"
 
+void tok_block_init(int zbits);
+
 struct tree_node;
 struct tree_node {
 	unsigned char nhash[SHA_DGST_LEN];

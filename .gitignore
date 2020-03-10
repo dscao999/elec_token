@@ -54,3 +54,6 @@ dkms.conf
 .*.swp
 ecc256
 mend
+genblk
+cblob
+core
