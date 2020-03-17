@@ -4,7 +4,7 @@
 #include "ripemd160.h"
 #include "tokens.h"
 
-struct etoken_in {
+struct tx_etoken_in {
 	BYTE txid[SHA_DGST_LEN];
 	union {
 		HALFW vout_idx;
@@ -14,20 +14,29 @@ struct etoken_in {
 	BYTE *unlock;
 };
 
-static inline int etoken_in_length(const struct etoken_in *etin)
-{
-	return sizeof(struct etoken_in) + etin->unlock_len;
-}
+struct tx_etoken_out {
+	struct etoken etk;
+	HALFW lock_len;
+	BYTE *lock;
+};
 
-struct tx_head {
+struct txrec {
 	WORD ver;
-	WORD vin_num;
-	struct etoken_in vins[0];
+	HALFW vin_num;
+	HALFW vout_num;
+	LONGW tm;
+	struct tx_etoken_in **vins;
+	struct tx_etoken_out **vouts;
 };
 
-struct tx_vout {
-	WORD nvout;
-	struct etoken vouts[0];
-};
+struct txrec *tx_create(int tkid, unsigned long value, int days,
+		const char *payto, const char *prkey);
+int tx_serialize(char *buf, int len, const struct txrec *tx);
+struct txrec *tx_deserialize(const char *buf, int len);
+
+void tx_destroy(struct txrec *tx);
+
+int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
+		int days, const char *payto, const char *prkey);
 
 #endif /* TOKTX_DSCAO__ */

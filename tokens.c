@@ -5,34 +5,18 @@
 #include "tokens.h"
 #include "loglog.h"
 
-static inline struct etk_option *next_option(struct etk_option *opt)
+int etoken_length(const struct etoken *cet)
 {
-	struct etk_option *nx_opt;
-	
-	nx_opt = ((void *)(opt + 1)) + opt->len;
-	assert(nx_opt->id > opt->id);
-	return nx_opt;
-}
+	int len;
+	struct etk_option *opt;
 
-static inline const struct etk_option *cnext_option(const struct etk_option *opt)
-{
-	const struct etk_option *nx_opt;
-
-	nx_opt = ((const void *)(opt + 1)) + opt->len;
-	assert(nx_opt->id > opt->id);
-	return nx_opt;
-}
-
-int etoken_optlen(const struct etk_option *opts, int numopts)
-{
-	const struct etk_option *copt = opts;
-	int len = 0;
-
-	while (numopts--) {
-		len += sizeof(struct etk_option) + copt->len;
-		copt = cnext_option(copt);
+	len = 0;
+	opt = cet->options;
+	while (opt) {
+		len += opt->len + 2;
+		opt = opt->next;
 	}
-	return len;
+	return len + sizeof(struct etoken) - sizeof(struct etk_option *) + 2;
 }
 
 int etoken_expired(const struct etoken *et)
@@ -45,30 +29,24 @@ int etoken_expired(const struct etoken *et)
 	return 0;
 }
 
-struct etoken *etoken_new(WORD token, LONGW value, int days, int numopts,
-		const struct etk_option *opts)
+struct etoken *etoken_new(int token, unsigned long value, int days)
 {
 	struct etoken *et;
 
-	et = malloc(sizeof(struct etoken) + etoken_optlen(opts, numopts));
-	if (!et)
+	et = malloc(sizeof(struct etoken));
+	if (!check_pointer(et))
 		return et;
-	etoken_init(et, token, value, days, numopts, opts);
+	etoken_init(et, token, value, days);
 	return et;
 }
 
-void etoken_init(struct etoken *et, WORD token, LONGW value, int days,
-		int numopts, const struct etk_option *opts)
+void etoken_init(struct etoken *et, int token, unsigned long value, int days)
 {
 	struct timespec tm;
-	int optlen;
 
-	et->token = token;
+	et->token_id = token;
 	et->value = et->value;
-	et->numopts = numopts;
-	optlen = etoken_optlen(opts, numopts);
-	memcpy(et->options, opts, optlen);
-
+	et->options = NULL;
 	clock_gettime(CLOCK_REALTIME, &tm);
 	if (days == 0)
 		et->expire = tm.tv_sec + 3650*24*3600;
@@ -76,16 +54,111 @@ void etoken_init(struct etoken *et, WORD token, LONGW value, int days,
 		et->expire = tm.tv_sec + days*24*3600;
 }
 
-struct etoken *etoken_clone(const struct etoken *cet, LONGW value)
+struct etoken *etoken_clone(const struct etoken *cet, unsigned long value)
 {
 	struct etoken *et;
+	const struct etk_option *etkopt;
+	struct etk_option *prev, *nopt;
 
-	et = malloc(sizeof(struct etoken) +
-			etoken_optlen(cet->options, cet->numopts));
-	if (!et)
+	et = malloc(sizeof(struct etoken));
+	if (!check_pointer(et))
 		return et;
 
 	*et = *cet;
 	et->value = value;
+	et->options = NULL;
+
+	prev = NULL;
+	etkopt = cet->options;
+	while (etkopt) {
+		nopt = malloc(sizeof(struct etk_option) + etkopt->len);
+		if (!check_pointer(nopt)) {
+			etoken_del(et);
+			return NULL;
+		}
+		nopt->next = NULL;
+		if (prev == NULL)
+			et->options = nopt;
+		else
+			prev->next = nopt;
+		nopt->id = etkopt->id;
+		nopt->len = etkopt->len;
+		memcpy(nopt->desc, etkopt->desc, nopt->len);
+		prev = nopt;
+		etkopt = etkopt->next;
+	}
+	
 	return et;
+}
+
+int etoken_serialize(char *buf, int len, const struct etoken *cet)
+{
+	int elen;
+	struct etoken *et;
+	const struct etk_option *opt;
+	char *nxt;
+
+	elen = etoken_length(cet);
+	if (len < elen)
+		return elen;
+	et = (struct etoken *)buf;
+	*et = *cet;
+	opt = cet->options;
+	nxt = (char *)&et->options;
+	while (opt) {
+		memcpy(nxt, &opt->id, opt->len + 2);
+		opt = opt->next;
+		nxt += opt->len + 2;
+	}
+	*nxt = ENDOPT;
+	*(nxt+1) = 0;
+	return elen;
+}
+
+int etoken_deserialize(const unsigned char *buf, int len, struct etoken *et)
+{
+	struct etk_option *opt, *prev;
+	const struct etoken *cet;
+	unsigned char mop, optlen;
+	const unsigned char *cc;
+	int retv = 0;
+
+	if (len < sizeof(struct etoken) - sizeof(struct etk_option *) + 2) {
+		logmsg(LOG_ERR, "Illformed etoken, not enough length\n");
+		return 1;
+	}
+	cet = (const struct etoken *)buf;
+	*et = *cet;
+	et->options = NULL;
+	cc = buf + sizeof(struct etoken) - sizeof(struct etk_option *);
+	mop = *cc;
+	optlen = *(cc+1);
+	prev = NULL;
+	while (mop != ENDOPT) {
+		opt = malloc(sizeof(struct etk_option) + optlen);
+		opt->next = NULL;
+		opt->id = mop;
+		opt->len = optlen;
+		if ((len - (buf - cc)) < opt->len + 2) {
+			logmsg(LOG_ERR, "Ill-formed etoken, premature end.\n");
+			retv = 2;
+			break;
+		}
+		memcpy(opt->desc, cc+2, opt->len);
+		if (prev == NULL)
+			et->options = opt;
+		else
+			prev->next = opt;
+
+		prev = opt;
+		cc += optlen + 2;
+		if ((len - (cc - buf)) <  2) {
+			logmsg(LOG_ERR, "Illformed token, no ENDOPT\n");
+			retv = 3;
+			break;
+		}
+		mop = *cc;
+		optlen = *(cc+1);
+	}
+	return retv;
 }
