@@ -26,9 +26,10 @@ struct etoken {
 	struct etk_option *options;
 };
 
-int etoken_length(const struct etoken *et);
-int etoken_serialize(char *buf, int len, const struct etoken *cet);
-int etoken_deserialize(const unsigned char *buf, int len, struct etoken *cet);
+int etoken_option_length(const struct etoken *et);
+int etoken_option_serialize(char *buf, int buflen, const struct etoken *cet);
+int etoken_option_deserialize(const char *buf, int buflen,
+		struct etoken *cet);
 int etoken_expired(const struct etoken *et);
 
 void etoken_init(struct etoken *et, int token, unsigned long value, int days);
@@ -36,7 +37,7 @@ struct etoken *etoken_clone(const struct etoken *et, unsigned long value);
 
 struct etoken *etoken_new(int token, unsigned long value, int days);
 
-static inline void etoken_del(struct etoken *et)
+static inline void etoken_option_del(const struct etoken *et)
 {
 	struct etk_option *opt, *del;
 
@@ -46,7 +47,6 @@ static inline void etoken_del(struct etoken *et)
 		opt = opt->next;
 		free(del);
 	}
-	free(et);
 }
 
 #endif  /* TOKENS_DSCAO__ */

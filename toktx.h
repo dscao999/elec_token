@@ -10,14 +10,16 @@ struct tx_etoken_in {
 		HALFW vout_idx;
 		BYTE odd, gensis;
 	};
+	HALFW reserv[2];
 	HALFW unlock_len;
 	BYTE *unlock;
 };
 
 struct tx_etoken_out {
-	struct etoken etk;
+	HALFW reserv[3];
 	HALFW lock_len;
 	BYTE *lock;
+	struct etoken etk;
 };
 
 struct txrec {
