@@ -13,31 +13,33 @@
 
 void tx_destroy(struct txrec *tx)
 {
-	struct tx_etoken_in **txin;
-	struct tx_etoken_out **txout;
+	struct tx_etoken_in **txins, *txin;
+	struct tx_etoken_out **txouts, *txout;
 	int i, nitem;
 
 	if (!tx)
 		return;
 
 	if (tx->vins) {
-		txin = tx->vins;
+		txins = tx->vins;
 		nitem = tx->vin_num;
-		for (i = 0; i < nitem && *txin; i++, txin++) {
-			if ((*txin)->unlock)
-				free((*txin)->unlock);
-			free(*txin);
+		for (i = 0; i < nitem && *txins; i++, txins++) {
+			txin = *txins;
+			if (txin->unlock)
+				free(txin->unlock);
+			free(txin);
 		}
 		free(tx->vins);
 	}
 	if (tx->vouts) {
 		nitem = tx->vout_num;
-		txout = tx->vouts;
-		for (i = 0; i < nitem && *txout; i++, txout++) {
-			etoken_option_del(&((*txout)->etk));
-			if ((*txout)->lock)
-				free((*txout)->lock);
-			free(*txout);
+		txouts = tx->vouts;
+		for (i = 0; i < nitem && *txouts; i++, txout++) {
+			txout = *txouts;
+			etoken_option_del(&txout->etk);
+			if (txout->lock)
+				free(txout->lock);
+			free(txout);
 		}
 		free(tx->vouts);
 	}
@@ -134,7 +136,7 @@ struct txrec *tx_create(int tkid, unsigned long value, int days,
 	memcpy(vin->unlock+1, eccsig, sizeof(struct ecc_sig));
 	pos = sizeof(struct ecc_sig) + 1;
 	vin->unlock[pos] = ECCKEY_INT_LEN * 4 + 1;
-	vin->unlock[pos] = 2 - (ecckey->py[0] & 1);
+	vin->unlock[pos+1] = 2 - (ecckey->py[0] & 1);
 	memcpy(vin->unlock+pos+2, ecckey->px, ECCKEY_INT_LEN * 4);
 
 	free(pool);
@@ -169,52 +171,55 @@ static inline int tx_etoken_out_length(const struct tx_etoken_out *txout)
 int tx_serialize(char *buf, int buflen, const struct txrec *tx)
 {
 	int txlen, numitem, i, rlen, pos;
-	struct tx_etoken_in **txin;
-	char *txin_ser, *txout_ser;
-	struct tx_etoken_out **txout;
+	struct tx_etoken_in **txins, *txin;
+	struct tx_etoken_out **txouts, *txout;
 	struct txrec *tx_ser;
-	struct tx_etoken_out *txout_entry;
+	char *txin_ser, *txout_ser;
 
 	txlen = align8(sizeof(struct txrec));
 	numitem = tx->vin_num;
-	txin = tx->vins;
-	for (i = 0; i < numitem; i++, txin++)
-		txlen = tx_etoken_in_length(*txin);
-	txout = tx->vouts;
+	txins = tx->vins;
+	for (i = 0; i < numitem; i++, txins++) {
+		txin = *txins;
+		txlen += tx_etoken_in_length(txin);
+	}
+	txouts = tx->vouts;
 	numitem = tx->vout_num;
-	for (i = 0; i < numitem; i++, txout++)
-		txlen += tx_etoken_out_length(*txout);
+	for (i = 0; i < numitem; i++, txouts++) {
+		txout = *txouts;
+		txlen += tx_etoken_out_length(txout);
+	}
 	if (buflen < txlen)
 		return -txlen;
 
 	tx_ser = (struct txrec *)buf;
 	*tx_ser = *tx;
 
-	txin = tx->vins;
+	txins = tx->vins;
 	txin_ser = buf + sizeof(struct txrec);
 	numitem = tx->vin_num;
-	for (i = 0; i < numitem; i++, txin++) {
-		memcpy(txin_ser, *txin, sizeof(struct tx_etoken_in));
-		if ((*txin)->unlock)
+	for (i = 0; i < numitem; i++, txins++) {
+		txin = *txins;
+		memcpy(txin_ser, txin, sizeof(struct tx_etoken_in));
+		if (txin->unlock)
 			memcpy(txin_ser+sizeof(struct tx_etoken_in),
-					(*txin)->unlock, (*txin)->unlock_len);
-		txin_ser += tx_etoken_in_length(*txin);
+					txin->unlock, txin->unlock_len);
+		txin_ser += tx_etoken_in_length(txin);
 	}
-	txout = tx->vouts;
+	txouts = tx->vouts;
 	txout_ser = txin_ser;
 	numitem = tx->vout_num;
-	for (i = 0; i < numitem; i++, txout++) {
-		txout_entry = *txout;
-		memcpy(txout_ser, txout_entry, sizeof(struct tx_etoken_out));
+	for (i = 0; i < numitem; i++, txouts++) {
+		txout = *txouts;
+		memcpy(txout_ser, txout, sizeof(struct tx_etoken_out));
 		pos = sizeof(struct tx_etoken_out);
 		rlen = buflen - (txout_ser - buf);
 		rlen = etoken_option_serialize(txout_ser+pos, rlen,
-				&txout_entry->etk);
+				&txout->etk);
 		pos += rlen;
-		if (txout_entry->lock)
-			memcpy(txout_ser+pos, txout_entry->lock,
-					txout_entry->lock_len);
-		txout_ser += tx_etoken_out_length(txout_entry);
+		if (txout->lock)
+			memcpy(txout_ser+pos, txout->lock, txout->lock_len);
+		txout_ser += tx_etoken_out_length(txout);
 	}
 	return txlen;
 }
@@ -222,8 +227,8 @@ int tx_serialize(char *buf, int buflen, const struct txrec *tx)
 struct txrec *tx_deserialize(const char *buf, int buflen)
 {
 	struct txrec *tx;
-	struct tx_etoken_in **txin;
-	struct tx_etoken_out **txout;
+	struct tx_etoken_in **txins, *txin;
+	struct tx_etoken_out **txouts, *txout;
 	const struct txrec *buftx;
 	const char *buf_txin, *buf_txout;
 	int i, nitem, pos, sumpos, len;
@@ -242,70 +247,71 @@ struct txrec *tx_deserialize(const char *buf, int buflen)
 	tx->vins = NULL;
 	tx->vouts = NULL;
 
-	tx->vins = malloc(sizeof(struct tx_etoken_in*)*tx->vin_num);
+	tx->vins = malloc(sizeof(struct tx_etoken_in *)*tx->vin_num);
 	if (!check_pointer(tx->vins)) {
 		logmsg(LOG_ERR, "Illformed tx record. \n");
 		goto err_exit_10;
 	}
-	tx->vouts = malloc(sizeof(struct tx_etoken_out)*tx->vout_num);
+	tx->vouts = malloc(sizeof(struct tx_etoken_out *)*tx->vout_num);
 	if (!check_pointer(tx->vouts)) {
 		logmsg(LOG_ERR, "Illformed tx record.\n");
 		goto err_exit_10;
 	}
-	memset(tx->vins, 0, sizeof(struct tx_etoken_in)*tx->vin_num);
-	memset(tx->vouts, 0, sizeof(struct tx_etoken_out)*tx->vin_num);
+	memset(tx->vins, 0, sizeof(struct tx_etoken_in *)*tx->vin_num);
+	memset(tx->vouts, 0, sizeof(struct tx_etoken_out *)*tx->vin_num);
 
 	nitem = tx->vin_num;
-	txin = tx->vins;
+	txins = tx->vins;
 	buf_txin = buf + sumpos;
-	for (i = 0; i < nitem; i++, txin++) {
+	for (i = 0; i < nitem; i++, txins++) {
 		if (sumpos + sizeof(struct tx_etoken_in) > buflen)
 			goto err_exit_10;
-		*txin = malloc(sizeof(struct tx_etoken_in));
-		if (!check_pointer(*txin))
+		txin = malloc(sizeof(struct tx_etoken_in));
+		*txins = txin;
+		if (!check_pointer(txin))
 			goto err_exit_10;
-		memcpy(*txin, buf_txin, sizeof(struct tx_etoken_in));
+		memcpy(txin, buf_txin, sizeof(struct tx_etoken_in));
 		pos = sizeof(struct tx_etoken_in);
-		if ((*txin)->unlock_len != 0) {
-			if (sumpos + pos + (*txin)->unlock_len > buflen) {
+		if (txin->unlock_len != 0) {
+			if (sumpos + pos + txin->unlock_len > buflen) {
 				logmsg(LOG_ERR, "Illformed tx record.\n");
 				goto err_exit_10;
 			}
-			(*txin)->unlock = malloc((*txin)->unlock_len);
-			if (!check_pointer((*txin)->unlock))
+			txin->unlock = malloc(txin->unlock_len);
+			if (!check_pointer(txin->unlock))
 				goto err_exit_10;
-			memcpy((*txin)->unlock, buf_txin+pos,
-					(*txin)->unlock_len);
+			memcpy(txin->unlock, buf_txin+pos, txin->unlock_len);
 		}
-		buf_txin += tx_etoken_in_length(*txin);
-		sumpos += tx_etoken_in_length(*txin);
+		buf_txin += tx_etoken_in_length(txin);
+		sumpos += tx_etoken_in_length(txin);
 	}
 	nitem = tx->vout_num;
-	txout = tx->vouts;
+	txouts = tx->vouts;
 	buf_txout = buf_txin;
-	for (i = 0; i < nitem; i++, txout++) {
+	for (i = 0; i < nitem; i++, txouts++) {
 		if (sumpos + sizeof(struct tx_etoken_out) > buflen)
 			goto err_exit_10;
-		*txout = malloc(sizeof(struct tx_etoken_out));
-		if (!check_pointer(*txout))
+		txout = malloc(sizeof(struct tx_etoken_out));
+		*txouts = txout;
+		if (!check_pointer(txout))
 			goto err_exit_10;
 		pos = sizeof(struct tx_etoken_out);
-		memcpy(*txout, buf_txout, pos);
+		memcpy(txout, buf_txout, pos);
 		len = etoken_option_deserialize(buf_txout+pos,
-				buflen - sumpos - pos, &(*txout)->etk);
+				buflen - sumpos - pos, &txout->etk);
 		if (len < 0)
 			goto err_exit_10;
 		pos += len;
-		if ((*txout)->lock_len > 0) {
-			if (sumpos + pos + (*txout)->lock_len > buflen)
+		if (txout->lock_len > 0) {
+			if (sumpos + pos + txout->lock_len > buflen)
 				goto err_exit_10;
-			(*txout)->lock = malloc((*txout)->lock_len);
-			if (!check_pointer((*txout)->lock))
+			txout->lock = malloc(txout->lock_len);
+			if (!check_pointer(txout->lock))
 				goto err_exit_10;
-			memcpy((*txout)->lock, buf_txout+pos, (*txout)->lock_len);
+			memcpy(txout->lock, buf_txout+pos, txout->lock_len);
 		}
-		buf_txout += tx_etoken_out_length(*txout);
-		sumpos += tx_etoken_out_length(*txout);
+		buf_txout += tx_etoken_out_length(txout);
+		sumpos += tx_etoken_out_length(txout);
 	}
 
 	return tx;

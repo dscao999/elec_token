@@ -46,7 +46,7 @@ void etoken_init(struct etoken *et, int token, unsigned long value, int days)
 	struct timespec tm;
 
 	et->token_id = token;
-	et->value = et->value;
+	et->value = value;
 	et->options = NULL;
 	clock_gettime(CLOCK_REALTIME, &tm);
 	if (days == 0)
@@ -118,7 +118,7 @@ int etoken_option_deserialize(const char *buf, int buflen,
 {
 	struct etk_option *opt, *prev;
 	unsigned char mop, optlen;
-	const unsigned char *cc;
+	const char *cc;
 	int len;
 
 	if (buflen < 2) {

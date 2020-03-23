@@ -8,7 +8,9 @@ struct tx_etoken_in {
 	BYTE txid[SHA_DGST_LEN];
 	union {
 		HALFW vout_idx;
-		BYTE odd, gensis;
+		struct {
+			BYTE odd, gensis;
+		};
 	};
 	HALFW reserv[2];
 	HALFW unlock_len;
