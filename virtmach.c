@@ -18,19 +18,13 @@ struct vmach *vmach_init(void)
 	vm = mmap(NULL, chunk_len, PROT_READ|PROT_WRITE,
 			MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 	if (vm) {
-		vm->ripe = ripemd160_init();
-		if (!vm->ripe) {
-			free(vm);
-			vm = NULL;
-		} else {
-			vm->chunk_len = chunk_len;
-			vm->top = VMACH_STACK_SIZE;
-			vm->buflen = VMACH_BUFLEN;
-			vm->scratch = vm->buf + vm->buflen;
-			vm->bufpos = 0;
-			for (i = 0; i < VMACH_STACK_SIZE; i++)
-				vm->stack[i] = NULL;
-		}
+		vm->chunk_len = chunk_len;
+		vm->top = VMACH_STACK_SIZE;
+		vm->buflen = VMACH_BUFLEN;
+		vm->scratch = vm->buf + vm->buflen;
+		vm->bufpos = 0;
+		for (i = 0; i < VMACH_STACK_SIZE; i++)
+			vm->stack[i] = NULL;
 	}
 	return vm;
 }
@@ -140,14 +134,12 @@ static int vmach_ripemd160(struct vmach *vm)
 	ct = vm->stack[spos];
 	msglen = *ct;
 	msg = ct + 1;
-	ripemd160_dgst(vm->ripe, (void *)msg, msglen-1);
+	ripemd160_reset(&vm->ripe);
+	ripemd160_dgst(&vm->ripe, (void *)msg, msglen);
 	vm->bufpos -= (msglen + 1);
-	msglen = bignum2str_b64((char *)msg, vm->buflen - vm->bufpos,
-			vm->ripe->H, RIPEMD_LEN/4);
-	assert(msglen < vm->buflen - vm->bufpos);
-	*ct = msglen + 1;
-	ripemd160_reset(vm->ripe);
-	vm->bufpos += (msglen + 2);
+	*ct = 20;
+	memcpy(ct+1, &vm->ripe, 20);
+	vm->bufpos += 21;
 	return 0;
 }
 
@@ -162,28 +154,25 @@ static int vmach_checksig(struct vmach *vm, const unsigned char *array,
 	if (vmach_stack_empty(vm))
 		return 1;
 	ekey = vm->scratch;
+	memset(ekey, 0, sizeof(struct ecc_key));
 	esig = vm->scratch + sizeof(struct ecc_key);
 	spos = vm->top;
 	msg = vm->stack[spos];
 	msglen = *msg;
-	assert(msg[msglen] == 0);
+	assert(msglen == 64);
 	vm->stack[spos] = NULL;
 	vm->top++;
 	vm->bufpos -= (msglen + 1);
-	retv = ecc_key_import(ekey, msg+1);
-	if (retv || vmach_stack_empty(vm))
-		return 1;
+	memcpy(ekey->px, msg+1, msglen);
 
 	spos = vm->top;
 	msg = vm->stack[spos];
 	msglen = *msg;
-	assert(msg[msglen] == 0);
+	assert(msglen == 64);
 	vm->stack[spos] = NULL;
 	vm->top++;
 	vm->bufpos -= (msglen + 1);
-	retv = ecc_str2sig(esig, msg+1);
-	if (retv)
-		return retv;
+	memcpy(esig, msg, msglen);
 	retv = ecc_verify(esig, ekey, array, array_len);
 	return retv;
 }

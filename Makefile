@@ -1,5 +1,5 @@
 
-CFLAGS += -I ../include -fPIC
+CFLAGS += -I../include -I/usr/include/mariadb -fPIC
 
 .PHONY: all clean release
 
@@ -9,7 +9,7 @@ genblk: genblock.o tok_block.o
 	$(LINK.o) -pthread $^ -L../lib -lecc256 -o $@
 
 toktx: txtokens.o toktx.o tokens.o
-	$(LINK.o) $^ -L../lib -lecc256 -o $@
+	$(LINK.o) $^ -L../lib -lmariadb -lecc256 -o $@
 
 clean:
 	rm -f *.o

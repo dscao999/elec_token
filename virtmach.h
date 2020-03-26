@@ -6,13 +6,14 @@
 #define VMACH_STACK_SIZE	1024
 enum vcode {
 	OP_NOP = 0x81, OP_CHECKSIG = 0xac, OP_EQUALVERIFY = 0x87,
-	OP_DUP = 0x82, OP_POPDATA = 0x8d, OP_RIPEMD160 = 0xae
+	OP_DUP = 0x82, OP_POPDATA = 0x8d, OP_RIPEMD160 = 0xae,
+	OP_CALCULATE_Y = 0x83, OP_BYTE2STR = 0x84
 };
 
 struct vmach {
 	int chunk_len;
 	int top;
-	struct ripemd160 *ripe;
+	struct ripemd160 ripe;
 	void *stack[VMACH_STACK_SIZE];
 	int bufpos, buflen;
 	void *scratch;
@@ -23,10 +24,8 @@ struct vmach *vmach_init(void);
 
 static inline void vmach_exit(struct vmach *vm)
 {
-	if (vm) {
-		ripemd160_exit(vm->ripe);
+	if (vm)
 		munmap(vm, vm->chunk_len);
-	}
 }
 
 static inline int vmach_stack_empty(const struct vmach *vm)

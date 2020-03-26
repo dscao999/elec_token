@@ -12,9 +12,10 @@ struct txrec *tx_read(const char *fname);
 
 int main(int argc, char *argv[])
 {
-	const char *payto, *prkey, *fname;
+	const char *payto, *prkey, *fname, *ofname;
 	struct txrec *tx;
 	int mark, fin, value, token, import = 0;
+	int verify = 0;
 	extern char *optarg;
 	extern int opterr, optopt;
 
@@ -22,14 +23,22 @@ int main(int argc, char *argv[])
 	payto = NULL;
 	prkey = NULL;
 	fname = NULL;
+	ofname = NULL;
 	value = 0;
 	token = 0;
 	fin = 0;
 	do {
-		mark = getopt(argc, argv, ":f:k:h:v:n:m");
+		mark = getopt(argc, argv, ":f:k:h:v:n:mro:");
 		switch(mark) {
+		case 'o':
+			ofname = optarg;
+			break;
 		case -1:
 			fin = 1;
+			break;
+		case 'r':
+			verify = 1;
+			import = 1;
 			break;
 		case 'n':
 			token = atoi(optarg);
@@ -79,8 +88,12 @@ int main(int argc, char *argv[])
 		}
 
 		save_tx(fname, tx);
-	} else
+	} else {
 		tx = tx_read(fname);
+		tx_verify_signature(tx);
+		if (ofname != NULL)
+			save_tx(ofname, tx);
+	}
 
 	tx_destroy(tx);
 	return 0;

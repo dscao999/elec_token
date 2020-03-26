@@ -163,5 +163,5 @@ int etoken_option_deserialize(const char *buf, int buflen,
 		len += opt->len + 2;
 	}
 	len += 2;
-	return len;
+	return align8(len);
 }
