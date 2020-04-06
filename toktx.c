@@ -163,7 +163,8 @@ struct txrec *tx_create(int tkid, unsigned long value, int days,
 	vin->unlock[pos+1] = 2 - (ecckey->py[0] & 1);
 	memcpy(vin->unlock+pos+2, ecckey->px, ECCKEY_INT_LEN * 4);
 	pos += ECCKEY_INT_LEN * 4 + 2;
-	vin->unlock[pos+1] = OP_CALCULATE_Y;
+	vin->unlock[pos] = OP_CALCULATE_Y;
+	assert(pos + 1 == vin->unlock_len);
 
 	free(pool);
 	return tx;
@@ -370,23 +371,23 @@ int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
 	return txlen;
 }
 
-static char *tx_sales_query(const char *khash, int eid, int *lock_len)
+static unsigned char *tx_sales_query(const char *khash, int eid, int *lock_len)
 {
-	char *query, *res;
-	int qsize, mysql_retv;
+	char *query, *res, *pkhash, *lock;
+	int qsize, mysql_retv, res_count;
 	MYSQL *mcon;
 	MYSQL_STMT *mstmt;
 	MYSQL_BIND pbind[2], rbind[1];
-	MYSQL_RES *prepare_meta_result;
 	unsigned short etok_id = eid;
 	unsigned long blob_len, khash_len;
+	int lsize;
 
 	qsize = 1024;
-	query = malloc(qsize*2);
+	query = malloc(qsize*2+64);
 	res = query + qsize;
-	strcpy(query, "select lockscript from sales where keyhash = ? " \
-			"and etoken_id = ?");
-
+	pkhash = res + qsize;
+	strcpy(query, "select lockscript from sales " \
+	       	"where keyhash = ? "  "and etoken_id = ?");
 
 	mcon = mysql_init(NULL);
 	if (!check_pointer(mcon))
@@ -405,26 +406,24 @@ static char *tx_sales_query(const char *khash, int eid, int *lock_len)
 				mysql_stmt_error(mstmt));
 		goto err_exit_20;
 	}
-	khash_len = strlen(khash);
+	strcpy(pkhash, khash);
+	khash_len = strlen(pkhash);
 	memset(pbind, 0, sizeof(pbind));
 	pbind[0].buffer_type = MYSQL_TYPE_STRING;
-	pbind[0].buffer = khash;
+	pbind[0].buffer = pkhash;
 	pbind[0].buffer_length = khash_len;
 	pbind[0].length = &khash_len;
 	pbind[1].buffer_type = MYSQL_TYPE_SHORT;
 	pbind[1].buffer = &etok_id;
+	pbind[1].is_unsigned = 1;
+	printf("etoken_id = %hu, key hash: %s\n", etok_id, pkhash);
 	mysql_retv = mysql_stmt_bind_param(mstmt, pbind);
 	if (mysql_retv) {
 		logmsg(LOG_ERR, "mysql_stmt_bind_param failed: %s\n",
 				mysql_stmt_error(mstmt));
 		goto err_exit_20;
 	}
-	if (mysql_stmt_execute(mstmt)) {
-		logmsg(LOG_ERR, "mysql_execute failed: %s\n", mysql_stmt_error(mstmt));
-		goto err_exit_20;
-	}
-	prepare_meta_result = mysql_stmt_result_metadata(mstmt);
-	logmsg(LOG_INFO, "Number of columns: %d\n", mysql_num_fields(prepare_meta_result));
+	memset(rbind, 0, sizeof(rbind));
 	rbind[0].buffer_type = MYSQL_TYPE_BLOB;
 	rbind[0].buffer = res;
 	rbind[0].buffer_length = qsize;
@@ -435,15 +434,33 @@ static char *tx_sales_query(const char *khash, int eid, int *lock_len)
 				mysql_stmt_error(mstmt));
 		goto err_exit_20;
 	}
-	mysql_retv = mysql_stmt_fetch(mstmt);
-	if (mysql_retv) {
-		logmsg(LOG_ERR, "mysql_stmt_fech failed: ");
-		if (mysql_retv == MYSQL_NO_DATA) {
-			logmsg(LOG_ERR, "No data returned.\n");
-			logmsg(LOG_ERR, query);
-			logmsg(LOG_ERR, "hash: %s, eid %d\n", khash, (int)etok_id);
-		}
+	if (mysql_stmt_execute(mstmt)) {
+		logmsg(LOG_ERR, "mysql_execute failed: %s\n", mysql_stmt_error(mstmt));
+		goto err_exit_20;
 	}
+	res_count = 0;
+	*lock_len = 0;
+	lsize = 128;
+	lock = malloc(lsize);
+	while ((mysql_retv = mysql_stmt_fetch(mstmt)) == 0) {
+		if (blob_len > lsize) {
+			lsize = blob_len;
+			lock = realloc(lock, lsize);
+		}
+		memcpy(lock, res, blob_len);
+		*lock_len = blob_len;
+		res_count++;
+	}
+	if (mysql_retv != MYSQL_NO_DATA)
+		logmsg(LOG_ERR, "mysql_stmt_fech failed: data truncated\n");
+	if (res_count > 1)
+		logmsg(LOG_ERR, "More than two lock scripts for %s, " \
+				"use the last one.\n", pkhash);
+
+	mysql_stmt_close(mstmt);
+	mysql_close(mcon);
+	free(query);
+	return (unsigned char *)lock;
 
 err_exit_20:
 	mysql_stmt_close(mstmt);
@@ -453,13 +470,13 @@ err_exit_10:
 	return NULL;
 }
 
-static char *tx_vin_getlock(const struct tx_etoken_in *txin, int tokid,
+static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
 		int *lock_len, unsigned long *val)
 {
 	struct ecc_key ekey;
 	char khash[32];
 	int len;
-	char *lock;
+	unsigned char *lock;
 
 	if (txin->gensis != 0x0ff)
 		return NULL;
@@ -469,37 +486,54 @@ static char *tx_vin_getlock(const struct tx_etoken_in *txin, int tokid,
 	ecc_get_public_y(&ekey, txin->odd);
 	len = ecc_key_hash(khash, 32, &ekey);
 	khash[len] = 0;
-	lock = tx_sales_query(khash, tokid, lock_len);
+	lock = tx_sales_query(khash, eid, lock_len);
 	return lock;
 }
 
 int tx_verify_signature(const struct txrec *tx)
 {
-	int retv = 0, i, lock_len, eid;
+	int retv, i, lock_len, suc;
 	const struct tx_etoken_in *txin;
 	const struct tx_etoken_out *txout;
-	char *lock = NULL;
+	const struct etoken *petk;
+	unsigned char *lock = NULL;
 	unsigned long out_val = 0, in_val = 0;
+	struct vmach *vm;
 
+	suc = 0;
+	retv = 0;
 	if (!tx->vouts || *tx->vouts == NULL)
-		return retv;
+		return suc;
 	txout = *tx->vouts;
-	eid = txout->etk.token_id;
+	petk = &txout->etk;
 	for (i = 0; i < tx->vout_num && txout; i++, txout++) {
-		if (txout->etk.token_id != eid)
-			return retv;
+		if (!etoken_equiv(&txout->etk, petk))
+			return suc;
 		out_val += txout->etk.value;
 	}
 
+	vm = vmach_init();
+	in_val = 0;
 	for(txin = *tx->vins, i = 0; i < tx->vin_num && txin; i++, txin++) {
-		lock = tx_vin_getlock(txin, eid, &lock_len, &in_val);
-		if (!lock)
-			return retv;
+		retv = vmach_execute(vm, txin->unlock, txin->unlock_len, NULL, 0);
+		if (retv < 0)
+			goto exit_20;
+		lock = tx_vin_getlock(txin, petk->token_id, &lock_len, &in_val);
+		if (!lock) {
+		       	if (vmach_success(vm))
+				suc = 1;
+			goto exit_20;
+		}
+		retv = vmach_execute(vm, lock, lock_len, NULL, 0);
 		free(lock);
+		if (retv <= 0 || !vmach_stack_empty(vm))
+			goto exit_20;
 	}
-	if (in_val < out_val)
-		return retv;
 
-	retv = 1;
-	return retv;
+	suc = 1;
+exit_20:
+	vmach_exit(vm);
+	if (in_val < out_val)
+		suc = 0;
+	return suc;
 }

@@ -14,8 +14,8 @@ int main(int argc, char *argv[])
 {
 	const char *payto, *prkey, *fname, *ofname;
 	struct txrec *tx;
-	int mark, fin, value, token, import = 0;
 	int verify = 0;
+	int mark, fin, value, token, import = 0;
 	extern char *optarg;
 	extern int opterr, optopt;
 
@@ -90,7 +90,12 @@ int main(int argc, char *argv[])
 		save_tx(fname, tx);
 	} else {
 		tx = tx_read(fname);
-		tx_verify_signature(tx);
+		if (verify) {
+			if (!tx_verify_signature(tx))
+				logmsg(LOG_ERR, "Invalid transaction.\n");
+			else
+				logmsg(LOG_INFO, "Valid transaction.\n");
+		}
 		if (ofname != NULL)
 			save_tx(ofname, tx);
 	}

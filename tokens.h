@@ -37,6 +37,14 @@ struct etoken *etoken_clone(const struct etoken *et, unsigned long value);
 
 struct etoken *etoken_new(int token, unsigned long value, int days);
 
+static inline int etoken_equiv(const struct etoken *l, const struct etoken *r)
+{
+	int equ = 0;
+	equ = (l->token_id == r->token_id) &&
+		(l->expire == r->expire);
+	return equ;
+}
+
 static inline void etoken_option_del(const struct etoken *et)
 {
 	struct etk_option *opt, *del;

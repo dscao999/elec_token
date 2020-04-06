@@ -2,6 +2,7 @@
 #define VIRTMACH_DSCAO__
 #include <sys/mman.h>
 #include "ripemd160.h"
+#include "sha256.h"
 
 #define VMACH_STACK_SIZE	1024
 enum vcode {
@@ -14,13 +15,16 @@ struct vmach {
 	int chunk_len;
 	int top;
 	struct ripemd160 ripe;
+	struct sha256 sha;
 	void *stack[VMACH_STACK_SIZE];
 	int bufpos, buflen;
 	void *scratch;
 	unsigned char buf[0];
 };
 
+void vmach_reset(struct vmach *vm);
 struct vmach *vmach_init(void);
+int vmach_success(struct vmach *vm);
 
 static inline void vmach_exit(struct vmach *vm)
 {

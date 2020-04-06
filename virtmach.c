@@ -9,23 +9,31 @@
 #define VMACH_SCRATCH	8192
 #define VMACH_BUFLEN	2097152
 
+void vmach_reset(struct vmach *vm)
+{
+	int i;
+
+	vm->top = VMACH_STACK_SIZE;
+	vm->buflen = VMACH_BUFLEN;
+	vm->scratch = vm->buf + vm->buflen;
+	vm->bufpos = 0;
+	for (i = 0; i < VMACH_STACK_SIZE; i++)
+		vm->stack[i] = NULL;
+}
+
 struct vmach *vmach_init(void)
 {
 	struct vmach *vm;
-	int i, chunk_len;
+	int chunk_len;
 
 	chunk_len = VMACH_BUFLEN + VMACH_SCRATCH + sizeof(struct vmach);
 	vm = mmap(NULL, chunk_len, PROT_READ|PROT_WRITE,
 			MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 	if (vm) {
 		vm->chunk_len = chunk_len;
-		vm->top = VMACH_STACK_SIZE;
-		vm->buflen = VMACH_BUFLEN;
-		vm->scratch = vm->buf + vm->buflen;
-		vm->bufpos = 0;
-		for (i = 0; i < VMACH_STACK_SIZE; i++)
-			vm->stack[i] = NULL;
+		vmach_reset(vm);
 	}
+
 	return vm;
 }
 
@@ -48,7 +56,7 @@ static int vmach_dupdata(struct vmach *vm)
 	vm->stack[spos] = nt;
 	vm->bufpos += (len + 1);
 	vm->top = spos;
-	return 0;
+	return len;
 }
 
 static int vmach_pushdata(struct vmach *vm, const unsigned char *opd, int len)
@@ -99,7 +107,7 @@ static int vmach_push_bool(struct vmach *vm, int tf)
 	vm->bufpos += 2;
 	vm->stack[spos] = opv;
 	vm->top = spos;
-	return 0;
+	return 1;
 }
 
 static int vmach_op_equalverify(struct vmach *vm)
@@ -118,14 +126,14 @@ static int vmach_op_equalverify(struct vmach *vm)
 	vm->top = top + 2;
 	vm->bufpos -= (r_len + l_len + 2);
 	if (l_len == r_len && memcmp(opl+1, opr+1, r_len) == 0)
-		tf = 0;
-	else 
 		tf = 1;
+	else 
+		tf = 0;
 	return tf;
 }
 static int vmach_ripemd160(struct vmach *vm)
 {
-	int spos, msglen;
+	int spos, msglen, mlen;
 	unsigned char *msg, *ct;
 
 	if (vmach_stack_empty(vm))
@@ -137,10 +145,11 @@ static int vmach_ripemd160(struct vmach *vm)
 	ripemd160_reset(&vm->ripe);
 	ripemd160_dgst(&vm->ripe, (void *)msg, msglen);
 	vm->bufpos -= (msglen + 1);
-	*ct = 20;
-	memcpy(ct+1, &vm->ripe, 20);
-	vm->bufpos += 21;
-	return 0;
+	mlen = 20;
+	*ct = mlen;
+	memcpy(ct+1, &vm->ripe, mlen);
+	vm->bufpos += mlen + 1;
+	return mlen;
 }
 
 static int vmach_checksig(struct vmach *vm, const unsigned char *array,
@@ -152,7 +161,7 @@ static int vmach_checksig(struct vmach *vm, const unsigned char *array,
 	struct ecc_sig *esig;
 
 	if (vmach_stack_empty(vm))
-		return 1;
+		return 0;
 	ekey = vm->scratch;
 	memset(ekey, 0, sizeof(struct ecc_key));
 	esig = vm->scratch + sizeof(struct ecc_key);
@@ -165,6 +174,8 @@ static int vmach_checksig(struct vmach *vm, const unsigned char *array,
 	vm->bufpos -= (msglen + 1);
 	memcpy(ekey->px, msg+1, msglen);
 
+	if (vmach_stack_empty(vm))
+		return 0;
 	spos = vm->top;
 	msg = vm->stack[spos];
 	msglen = *msg;
@@ -177,12 +188,31 @@ static int vmach_checksig(struct vmach *vm, const unsigned char *array,
 	return retv;
 }
 
+static int vmach_calculate_y(struct vmach *vm)
+{
+	int len;
+	struct ecc_key ekey;
+	unsigned char *buf;
+
+	memset(&ekey, 0, sizeof(ekey));
+	buf = ((unsigned char *)ekey.pr) + 31;
+	len = vmach_popdata(vm, buf, 33);
+	if (len != 33)
+		return -1;
+	ecc_get_public_y(&ekey, *buf);
+	len = vmach_pushdata(vm, (const unsigned char *)ekey.px, 64);
+	return len;
+}
+
 int cmd_execute(struct vmach *vm, unsigned char cmd,
 		const unsigned char *array, int array_len)
 {
 	int retv = 0;
 
 	switch(cmd) {
+	case OP_CALCULATE_Y:
+		retv = vmach_calculate_y(vm);
+		break;
 	case OP_DUP:
 		retv = vmach_dupdata(vm);
 		break;
@@ -196,7 +226,7 @@ int cmd_execute(struct vmach *vm, unsigned char cmd,
 		retv = vmach_checksig(vm, array, array_len);
 		break;
 	case OP_NOP:
-		retv = 0;
+		retv = 1;
 		break;
 	default:
 		retv = -1;
@@ -204,10 +234,10 @@ int cmd_execute(struct vmach *vm, unsigned char cmd,
 	return retv;
 }
 
-int vmach_execute(struct vmach *vm, const unsigned char *script, int len,
+int vmach_execute(struct vmach *vm, const unsigned char *script, int slen,
 		const unsigned char *array, int array_len)
 {
-	int retv = 0, pos = 0;
+	int retv = 0, pos = 0, len;
 	const unsigned char *token;
 
 	token = script;
@@ -222,6 +252,19 @@ int vmach_execute(struct vmach *vm, const unsigned char *script, int len,
 			pos += len + 1;
 			token += len + 1;
 		}
-	} while (pos < len && retv == 0);
+	} while (pos < slen && retv > 0);
 	return retv;
+}
+
+int vmach_success(struct vmach *vm)
+{
+	unsigned char *len;
+
+	if (vm->top != VMACH_STACK_SIZE - 1)
+		return 0;
+	len = vm->stack[vm->top];
+	if (*len != 1 || *(len+1) == 0)
+		return 0;
+	vmach_reset(vm);
+	return 1;
 }

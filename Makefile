@@ -8,7 +8,7 @@ all: genblk txtok
 genblk: genblock.o tok_block.o
 	$(LINK.o) -pthread $^ -L../lib -lecc256 -o $@
 
-toktx: txtokens.o toktx.o tokens.o
+toktx: txtokens.o toktx.o tokens.o virtmach.o
 	$(LINK.o) $^ -L../lib -lmariadb -lecc256 -o $@
 
 clean:
