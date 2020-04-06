@@ -91,7 +91,7 @@ int main(int argc, char *argv[])
 	} else {
 		tx = tx_read(fname);
 		if (verify) {
-			if (!tx_verify_signature(tx))
+			if (!tx_verify(tx))
 				logmsg(LOG_ERR, "Invalid transaction.\n");
 			else
 				logmsg(LOG_INFO, "Valid transaction.\n");
@@ -123,7 +123,7 @@ void save_tx(const char *fname, const struct txrec *tx)
 	if (!check_pointer(buf))
 		goto exit_10;
 
-	len = tx_serialize(buf, 1024, tx);
+	len = tx_serialize(buf, 1024, tx, 1);
 	if (len <= 1024)
 		fwrite(buf, 1, len, fh);
 

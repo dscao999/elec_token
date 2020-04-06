@@ -35,7 +35,7 @@ struct txrec {
 
 struct txrec *tx_create(int tkid, unsigned long value, int days,
 		const char *payto, const char *prkey);
-int tx_serialize(char *buf, int len, const struct txrec *tx);
+int tx_serialize(char *buf, int len, const struct txrec *tx, int with_unlock);
 struct txrec *tx_deserialize(const char *buf, int len);
 
 void tx_destroy(struct txrec *tx);
@@ -43,6 +43,6 @@ void tx_destroy(struct txrec *tx);
 int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
 		int days, const char *payto, const char *prkey);
 
-int tx_verify_signature(const struct txrec *tx);
+int tx_verify(const struct txrec *tx);
 
 #endif /* TOKTX_DSCAO__ */

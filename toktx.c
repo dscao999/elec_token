@@ -149,7 +149,7 @@ struct txrec *tx_create(int tkid, unsigned long value, int days,
 		goto err_exit_30;
 	}
 
-	txlen = tx_serialize(buf, buflen, tx);
+	txlen = tx_serialize(buf, buflen, tx, 0);
 	assert(txlen <= buflen);
 	ecc_sign(eccsig, ecckey, (const unsigned char *)buf, txlen);
 	vin->unlock_len = sizeof(struct ecc_sig) + ECCKEY_INT_LEN * 4 + 4;
@@ -178,11 +178,13 @@ err_exit_10:
 	return NULL;
 }
 
-static inline int tx_etoken_in_length(const struct tx_etoken_in *txin)
+static inline int tx_etoken_in_length(const struct tx_etoken_in *txin, int with_unlock)
 {
 	int len;
 	
-	len = sizeof(struct tx_etoken_in) + txin->unlock_len;
+	len = sizeof(struct tx_etoken_in);
+	if (with_unlock)
+		len += txin->unlock_len;
 	return align8(len);
 }
 
@@ -195,7 +197,7 @@ static inline int tx_etoken_out_length(const struct tx_etoken_out *txout)
 	return align8(len);
 }
 
-int tx_serialize(char *buf, int buflen, const struct txrec *tx)
+int tx_serialize(char *buf, int buflen, const struct txrec *tx, int with_unlock)
 {
 	int txlen, numitem, i, rlen, pos;
 	struct tx_etoken_in **txins, *txin;
@@ -208,7 +210,7 @@ int tx_serialize(char *buf, int buflen, const struct txrec *tx)
 	txins = tx->vins;
 	for (i = 0; i < numitem; i++, txins++) {
 		txin = *txins;
-		txlen += tx_etoken_in_length(txin);
+		txlen += tx_etoken_in_length(txin, with_unlock);
 	}
 	txouts = tx->vouts;
 	numitem = tx->vout_num;
@@ -231,11 +233,11 @@ int tx_serialize(char *buf, int buflen, const struct txrec *tx)
 	for (i = 0; i < numitem; i++, txins++) {
 		txin = *txins;
 		memcpy(txin_ser, txin, sizeof(struct tx_etoken_in));
-		if (txin->unlock)
+		if (with_unlock && txin->unlock)
 			memcpy(txin_ser+sizeof(struct tx_etoken_in),
 					txin->unlock, txin->unlock_len);
 		((struct tx_etoken_in *)txin_ser)->unlock = NULL;
-		txin_ser += tx_etoken_in_length(txin);
+		txin_ser += tx_etoken_in_length(txin, with_unlock);
 	}
 	txouts = tx->vouts;
 	txout_ser = txin_ser;
@@ -316,8 +318,8 @@ struct txrec *tx_deserialize(const char *buf, int buflen)
 				goto err_exit_10;
 			memcpy(txin->unlock, buf_txin+pos, txin->unlock_len);
 		}
-		buf_txin += tx_etoken_in_length(txin);
-		sumpos += tx_etoken_in_length(txin);
+		buf_txin += tx_etoken_in_length(txin, 1);
+		sumpos += tx_etoken_in_length(txin, 1);
 	}
 	nitem = tx->vout_num;
 	txouts = tx->vouts;
@@ -365,7 +367,7 @@ int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
 	tx = tx_create(tkid, value, days, payto, prkey);
 	if (!check_pointer(tx))
 		return -ENOMEM;
-	txlen = tx_serialize(buf, buflen, tx);
+	txlen = tx_serialize(buf, buflen, tx, 1);
 	if (txlen < 0)
 		return 0;
 	return txlen;
@@ -490,7 +492,7 @@ static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
 	return lock;
 }
 
-int tx_verify_signature(const struct txrec *tx)
+int tx_verify(const struct txrec *tx)
 {
 	int retv, i, lock_len, suc;
 	const struct tx_etoken_in *txin;
