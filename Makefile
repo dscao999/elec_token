@@ -3,7 +3,7 @@ CFLAGS += -I../include -I/usr/include/mariadb -fPIC
 
 .PHONY: all clean release
 
-all: genblk txtok
+all: genblk toktx
 
 genblk: genblock.o tok_block.o
 	$(LINK.o) -pthread $^ -L../lib -lecc256 -o $@
@@ -13,7 +13,7 @@ toktx: txtokens.o toktx.o tokens.o virtmach.o
 
 clean:
 	rm -f *.o
-	rm -f genblk
+	rm -f genblk toktx
 
 release: all
 

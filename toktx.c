@@ -12,6 +12,7 @@
 #include "virtmach.h"
 
 #define TOKEN_TX_VER	0x01
+#define SCRATCH_LEN	4096
 
 struct db_param {
 	char host[64];
@@ -237,6 +238,8 @@ int tx_serialize(char *buf, int buflen, const struct txrec *tx, int with_unlock)
 			memcpy(txin_ser+sizeof(struct tx_etoken_in),
 					txin->unlock, txin->unlock_len);
 		((struct tx_etoken_in *)txin_ser)->unlock = NULL;
+		if (with_unlock == 0)
+			((struct tx_etoken_in *)txin_ser)->unlock_len = 0;
 		txin_ser += tx_etoken_in_length(txin, with_unlock);
 	}
 	txouts = tx->vouts;
@@ -246,10 +249,10 @@ int tx_serialize(char *buf, int buflen, const struct txrec *tx, int with_unlock)
 		txout = *txouts;
 		memcpy(txout_ser, txout, sizeof(struct tx_etoken_out));
 		((struct tx_etoken_out *)txout_ser)->lock = NULL;
+		((struct tx_etoken_out *)txout_ser)->etk.options = NULL;
 		pos = sizeof(struct tx_etoken_out);
-		rlen = buflen - (txout_ser - buf);
-		rlen = etoken_option_serialize(txout_ser+pos, rlen,
-				&txout->etk);
+		rlen = etoken_option_serialize(txout_ser+pos,
+				buflen - (txout_ser - buf), &txout->etk);
 		pos += rlen;
 		if (txout->lock)
 			memcpy(txout_ser+pos, txout->lock, txout->lock_len);
@@ -494,13 +497,14 @@ static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
 
 int tx_verify(const struct txrec *tx)
 {
-	int retv, i, lock_len, suc;
+	int retv, i, lock_len, suc, serlen;
 	const struct tx_etoken_in *txin;
 	const struct tx_etoken_out *txout;
 	const struct etoken *petk;
-	unsigned char *lock = NULL;
+	unsigned char *lock = NULL, *buf;
 	unsigned long out_val = 0, in_val = 0;
 	struct vmach *vm;
+	void *scratch;
 
 	suc = 0;
 	retv = 0;
@@ -514,6 +518,9 @@ int tx_verify(const struct txrec *tx)
 		out_val += txout->etk.value;
 	}
 
+	scratch = malloc(SCRATCH_LEN);
+	buf = scratch;
+	serlen = tx_serialize((char *)buf, SCRATCH_LEN, tx, 0);
 	vm = vmach_init();
 	in_val = 0;
 	for(txin = *tx->vins, i = 0; i < tx->vin_num && txin; i++, txin++) {
@@ -526,7 +533,7 @@ int tx_verify(const struct txrec *tx)
 				suc = 1;
 			goto exit_20;
 		}
-		retv = vmach_execute(vm, lock, lock_len, NULL, 0);
+		retv = vmach_execute(vm, lock, lock_len, buf, serlen);
 		free(lock);
 		if (retv <= 0 || !vmach_stack_empty(vm))
 			goto exit_20;
@@ -535,6 +542,7 @@ int tx_verify(const struct txrec *tx)
 	suc = 1;
 exit_20:
 	vmach_exit(vm);
+	free(scratch);
 	if (in_val < out_val)
 		suc = 0;
 	return suc;

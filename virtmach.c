@@ -183,7 +183,7 @@ static int vmach_checksig(struct vmach *vm, const unsigned char *array,
 	vm->stack[spos] = NULL;
 	vm->top++;
 	vm->bufpos -= (msglen + 1);
-	memcpy(esig, msg, msglen);
+	memcpy(esig, msg+1, msglen);
 	retv = ecc_verify(esig, ekey, array, array_len);
 	return retv;
 }
