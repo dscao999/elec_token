@@ -220,7 +220,7 @@ int tx_serialize(char *buf, int buflen, const struct txrec *tx, int with_unlock)
 		txlen += tx_etoken_out_length(txout);
 	}
 	if (buflen < txlen)
-		return -txlen;
+		return txlen;
 	memset(buf, 0, txlen);
 
 	tx_ser = (struct txrec *)buf;
@@ -371,8 +371,9 @@ int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
 	if (!check_pointer(tx))
 		return -ENOMEM;
 	txlen = tx_serialize(buf, buflen, tx, 1);
-	if (txlen < 0)
-		return 0;
+	tx_destroy(tx);
+	if (txlen > buflen)
+		logmsg(LOG_WARNING, "Not enough buffer space for new token.\n");
 	return txlen;
 }
 
@@ -521,6 +522,7 @@ int tx_verify(const struct txrec *tx)
 	scratch = malloc(SCRATCH_LEN);
 	buf = scratch;
 	serlen = tx_serialize((char *)buf, SCRATCH_LEN, tx, 0);
+	assert(serlen <= SCRATCH_LEN);
 	vm = vmach_init();
 	in_val = 0;
 	for(txin = *tx->vins, i = 0; i < tx->vin_num && txin; i++, txin++) {
