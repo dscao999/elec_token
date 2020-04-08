@@ -4,6 +4,7 @@
 #include <string.h>
 #include <my_global.h>
 #include <mysql.h>
+#include "global_param.h"
 #include "loglog.h"
 #include "tokens.h"
 #include "toktx.h"
@@ -13,26 +14,6 @@
 
 #define TOKEN_TX_VER	0x01
 #define SCRATCH_LEN	4096
-
-struct db_param {
-	char host[64];
-	char passwd[32];
-	char user[16];
-	char dbname[16];
-};
-
-struct global_param {
-	struct db_param db;
-};
-
-static struct global_param g_param = {
-	{
-		.host = "localhost",
-		.dbname = "electoken",
-		.user = "dscao",
-		.passwd = ""
-	}
-};
 
 void tx_destroy(struct txrec *tx)
 {
@@ -398,8 +379,8 @@ static unsigned char *tx_sales_query(const char *khash, int eid, int *lock_len)
 	mcon = mysql_init(NULL);
 	if (!check_pointer(mcon))
 		return NULL;
-	if (mysql_real_connect(mcon, g_param.db.host, g_param.db.user,
-			g_param.db.passwd, g_param.db.dbname, 0, NULL, 0) == NULL) {
+	if (mysql_real_connect(mcon, g_param->db.host, g_param->db.user,
+			g_param->db.passwd, g_param->db.dbname, 0, NULL, 0) == NULL) {
 		logmsg(LOG_ERR, "mysql connect failed: %s\n", mysql_error(mcon));
 		goto err_exit_10;
 	}

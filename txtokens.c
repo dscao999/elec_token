@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <errno.h>
+#include "global_param.h"
 #include "loglog.h"
 #include "ecc_secp256k1.h"
 #include "toktx.h"
@@ -68,6 +69,7 @@ int main(int argc, char *argv[])
 			assert(0);
 		}
 	} while (fin == 0);
+	global_param_init(NULL);
 	if ((!payto || !prkey) && import == 0) {
 		logmsg(LOG_ERR, "no key, or no receipient!\n");
 		return 1;

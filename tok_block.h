@@ -14,7 +14,8 @@ struct tree_node {
 struct bl_header {
 	unsigned short ver;
 	unsigned short zbits;
-	unsigned int node_id;
+	unsigned short node_id;
+	unsigned short numtxs;
 	unsigned char prev_hash[SHA_DGST_LEN];
 	unsigned char mtree_root[SHA_DGST_LEN];
 	unsigned long tm;
