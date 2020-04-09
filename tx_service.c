@@ -9,11 +9,25 @@
 #include <pthread.h>
 #include <assert.h>
 #include <unistd.h>
+#include <signal.h>
+#include <poll.h>
+#include "global_param.h"
 #include "loglog.h"
 #include "wcomm.h"
 #include "toktx.h"
 
 static volatile int global_exit = 0;
+
+static void sig_handler(int sig)
+{
+	if (sig == SIGTERM || sig == SIGINT)
+		global_exit = 1;
+}
+
+int tx_send_ack(struct winfo *wif, int ack)
+{
+	return 0;
+}
 
 void * tx_process(void *arg)
 {
@@ -28,9 +42,10 @@ void * tx_process(void *arg)
 		clock_gettime(CLOCK_REALTIME, &tm);
 		tm.tv_sec += 1;
 		rc = 0;
-		while (wcomm_empty(wm) && (rc == 0 || rc == ETIMEDOUT))
+		while (global_exit == 0 && wcomm_empty(wm) &&
+				(rc == 0 || rc == ETIMEDOUT))
 			rc = pthread_cond_timedwait(&wm->wcd, &wm->wmtx, &tm);
-		if (rc != 0) {
+		if (rc != 0 && rc != ETIMEDOUT) {
 			logmsg(LOG_ERR, "pthread_cond_timedwait failed: %s\n",
 					strerror(rc));
 			global_exit = 1;
@@ -48,6 +63,7 @@ void * tx_process(void *arg)
 			tx = tx_deserialize(wif->wpkt.pkt, wif->wpkt.len);
 			if (tx) {
 				suc = tx_verify(tx);
+				tx_send_ack(wif, suc);
 				if (suc)
 					printf("Verified!\n");
 				else
@@ -71,14 +87,19 @@ int tx_recv(int port, struct wcomm *wm)
 	struct sockaddr_in *sin_addr;
 	char portnum[8];
 	struct winfo *wif;
+	struct pollfd pfd[1];
 
+	memset(pfd, 0, sizeof(pfd));
 	sd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (unlikely(sd == -1)) {
 		logmsg(LOG_ERR, "Cannot create a UDP socket: %s\n",
 				strerror(errno));
 		return -errno;
 	}
-	sprintf(portnum, "%d", 61001);
+	pfd[0].fd = sd;
+	pfd[0].events = POLLIN;
+
+	sprintf(portnum, "%d", port);
 	memset(&ahint, 0, sizeof(ahint));
 	ahint.ai_flags = AI_PASSIVE;
 	ahint.ai_family = AF_INET;
@@ -103,6 +124,19 @@ int tx_recv(int port, struct wcomm *wm)
 	do {
 		wif = wcomm_getarea(wm);
 		saddr_len = sizeof(wif->srcaddr);
+		do {
+			pfd[0].revents = 0;
+			sysret = poll(pfd, 1, 800);
+			if (sysret == 0)
+				continue;
+			else if (sysret == -1 && errno != EINTR) {
+				logmsg(LOG_ERR, "poll error: %s\n",
+						strerror(errno));
+				global_exit = 1;
+			}
+		} while ((pfd[0].revents & POLLIN) == 0 && global_exit == 0);
+		if (global_exit)
+			break;
 		numb = recvfrom(sd, &wif->wpkt, buflen, 0,
 				(struct sockaddr *)&wif->srcaddr, &saddr_len);
 		if (numb == -1) {
@@ -119,4 +153,41 @@ int tx_recv(int port, struct wcomm *wm)
 	} while (global_exit == 0);
 	close(sd);
 	return 0;
+}
+
+int main(int argc, char *argv[])
+{
+	struct wcomm *wm;
+	int retv, sysret;
+	struct sigaction sigact;
+	pthread_t rcvthd;
+
+	global_param_init(NULL, 1, 0);
+	wm = wcomm_init();
+	if (!wm)
+		return 1;
+
+	memset(&sigact, 0, sizeof(sigact));
+	sigact.sa_handler = sig_handler;
+	sysret = sigaction(SIGTERM, &sigact, NULL);
+	if (unlikely(sysret == -1))
+		logmsg(LOG_WARNING, "Cannot install signal handler for " \
+				"SIGTERM: %s\n", strerror(errno));
+	sysret = sigaction(SIGINT, &sigact, NULL);
+	if (unlikely(sysret == -1))
+		logmsg(LOG_WARNING, "Cannot install signal handler for " \
+				"SIGINT: %s\n", strerror(errno));
+
+	sysret = pthread_create(&rcvthd, NULL, tx_process, wm);
+	if (sysret) {
+		logmsg(LOG_ERR, "pthread create failed: %s\n",
+				strerror(errno));
+		return 2;
+	}
+	retv = tx_recv(g_param->netp.port, wm);
+	if (retv < 0)
+		retv = -retv;
+	pthread_join(rcvthd, NULL);
+
+	return retv;
 }

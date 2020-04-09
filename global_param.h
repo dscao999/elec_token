@@ -18,5 +18,5 @@ struct global_param {
 
 extern const struct global_param *g_param;
 
-void global_param_init(const char *cnf);
+void global_param_init(const char *cnf, int ecc, int alsa);
 #endif /* GLOBAL_PARAM_DSCAO__ */

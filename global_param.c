@@ -1,4 +1,6 @@
 #include "global_param.h"
+#include "ecc_secp256k1.h"
+#include "alsarec.h"
 
 static struct global_param all_param = {
 	.db = {
@@ -14,7 +16,11 @@ static struct global_param all_param = {
 
 const struct global_param *g_param;
 
-void global_param_init(const char *cnf)
+void global_param_init(const char *cnf, int ecc, int alsa)
 {
 	g_param = &all_param;
+	if (ecc)
+		ecc_init();
+	if (alsa)
+		alsa_init(NULL);
 }
