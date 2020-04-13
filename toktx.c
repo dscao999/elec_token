@@ -443,6 +443,10 @@ static unsigned char *tx_sales_query(const char *khash, int eid, int *lock_len)
 	if (res_count > 1)
 		logmsg(LOG_ERR, "More than two lock scripts for %s, " \
 				"use the last one.\n", pkhash);
+	else if (res_count < 1) {
+		free(lock);
+		lock = NULL;
+	}
 
 	mysql_stmt_close(mstmt);
 	mysql_close(mcon);

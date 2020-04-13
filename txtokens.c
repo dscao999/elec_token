@@ -69,7 +69,7 @@ int main(int argc, char *argv[])
 			assert(0);
 		}
 	} while (fin == 0);
-	global_param_init(NULL);
+	global_param_init(NULL, 1, 1);
 	if ((!payto || !prkey) && import == 0) {
 		logmsg(LOG_ERR, "no key, or no receipient!\n");
 		return 1;
@@ -78,9 +78,6 @@ int main(int argc, char *argv[])
 		value = 1010;
 	if (token == 0)
 		token = 40033;
-
-	alsa_init(NULL);
-	ecc_init();
 
 	if (import == 0) {
 		tx = tx_create(token, value, 0, payto, prkey);

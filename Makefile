@@ -30,5 +30,5 @@ release: CFLAGS += -O2
 
 release: LDFLAGS += -O1
 
-../lib/libtoktx.so: tokens.o toktx.o virtmach.o $(eccobj)
+../lib/libtoktx.so: tokens.o toktx.o virtmach.o global_param.o $(eccobj)
 	$(LINK.o) -shared -Bsymblic $^ -lmariadb -lgmp -lasound -o $@
