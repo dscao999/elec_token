@@ -7,7 +7,7 @@
 #define MAX_POINTER_MASK 0x3f
 #define MAX_TXSIZE 2048
 
-enum TX_TYPE {TX_REC, UTXO_REQ};
+enum TX_TYPE {TX_REC = 1, UTXO_REQ = 2};
 
 struct wpacket {
 	unsigned short len;
@@ -25,6 +25,7 @@ struct wcomm {
 	char buf[MAX_POINTER*MAX_TXSIZE];
 	pthread_cond_t wcd;
 	pthread_mutex_t wmtx;
+	int sock;
 	volatile short tail;
 	short head;
 };

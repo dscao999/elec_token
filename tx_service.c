@@ -24,18 +24,40 @@ static void sig_handler(int sig)
 		global_exit = 1;
 }
 
-int tx_send_ack(struct winfo *wif, int ack)
+void txrec_verify(int sock, struct winfo *wif)
 {
-	return 0;
+	int suc, numb;
+	struct txrec *tx;
+	unsigned char sha_dgst[32];
+	struct sockaddr_in *sockaddr;
+	char buf[16];
+
+	sha256_to_str(sha_dgst, (const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
+	tx = tx_deserialize(wif->wpkt.pkt, wif->wpkt.len);
+	if (tx) {
+		suc = tx_verify(tx);
+		wif->wpkt.ptype = suc;
+		wif->wpkt.len = SHA_DGST_LEN;
+		memcpy(wif->wpkt.pkt, sha_dgst, SHA_DGST_LEN);
+		sockaddr = (struct sockaddr_in *)&wif->srcaddr;
+		numb = sendto(sock, &wif->wpkt,
+				wif->wpkt.len + sizeof(wif->wpkt), 0,
+				(const struct sockaddr *)sockaddr,
+				sizeof(struct sockaddr_in));
+		if (suc)
+			printf("Verified! ack: %d\n", numb);
+		else
+			printf("Invalid Tx! ack: %d\n", numb);
+		tx_destroy(tx);
+	}
 }
 
 void * tx_process(void *arg)
 {
 	struct wcomm *wm = arg;
-	int rc, suc;
+	int rc;
 	struct timespec tm;
 	struct winfo *wif;
-	struct txrec *tx;
 
 	do {
 		pthread_mutex_lock(&wm->wmtx);
@@ -60,16 +82,7 @@ void * tx_process(void *arg)
 			continue;
 		switch(wif->wpkt.ptype) {
 		case TX_REC:
-			tx = tx_deserialize(wif->wpkt.pkt, wif->wpkt.len);
-			if (tx) {
-				suc = tx_verify(tx);
-				tx_send_ack(wif, suc);
-				if (suc)
-					printf("Verified!\n");
-				else
-					printf("Invalid Tx!\n");
-				tx_destroy(tx);
-			}
+			txrec_verify(wm->sock, wif);
 			break;
 		default:
 			;
@@ -120,6 +133,7 @@ int tx_recv(int port, struct wcomm *wm)
 		return -errno;
 	}
 	freeaddrinfo(resaddr);
+	wm->sock = sd;
 	buflen = MAX_TXSIZE - sizeof(struct sockaddr_storage);
 	do {
 		wif = wcomm_getarea(wm);
