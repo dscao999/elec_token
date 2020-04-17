@@ -11,9 +11,14 @@ struct net_param {
 	int port;
 };
 
+struct thread_param {
+	int numths;
+};
+
 struct global_param {
 	struct db_param db;
 	struct net_param netp;
+	struct thread_param thp;
 };
 
 extern const struct global_param *g_param;

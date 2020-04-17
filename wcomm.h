@@ -2,6 +2,8 @@
 #define WCOMM_DSCAO__
 #include <pthread.h>
 #include <sys/socket.h>
+#include <my_global.h>
+#include <mysql.h>
 
 #define MAX_POINTER 64
 #define MAX_POINTER_MASK 0x3f
@@ -58,7 +60,7 @@ static inline void wcomm_tail_inc(struct wcomm *wm)
 void wcomm_exit(struct wcomm *wm);
 struct wcomm *wcomm_init(void);
 
-struct winfo *wcomm_remove(struct wcomm *wm);
+const struct winfo *wcomm_getload(struct wcomm *wm);
 void wcomm_signal(struct wcomm *wm);
 
 #endif /* WCOMM_DSCAO__ */

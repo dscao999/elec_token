@@ -11,6 +11,9 @@ static struct global_param all_param = {
 	},
 	.netp = {
 		.port = 6001
+	},
+	.thp = {
+		.numths = 2
 	}
 };
 
