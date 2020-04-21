@@ -12,10 +12,10 @@
 enum TX_TYPE {TX_REC = 1, UTXO_REQ = 2};
 
 struct wpacket {
-	unsigned short len;
-	unsigned short ptype;
+	unsigned int len;
+	unsigned int ptype;
 	char pkt[0];
-};
+} __attribute__((aligned(8)));
 
 struct winfo {
 	struct sockaddr_storage srcaddr;

@@ -3,6 +3,7 @@
 #include "sha256.h"
 #include "ripemd160.h"
 #include "tokens.h"
+#include "ecc_secp256k1.h"
 
 struct tx_etoken_in {
 	BYTE txid[SHA_DGST_LEN];
@@ -34,14 +35,14 @@ struct txrec {
 };
 
 struct txrec *tx_create(int tkid, unsigned long value, int days,
-		const char *payto, const char *prkey);
+		const char *payto, const struct ecc_key *ecckey);
 int tx_serialize(char *buf, int len, const struct txrec *tx, int with_unlock);
 struct txrec *tx_deserialize(const char *buf, int len);
 
 void tx_destroy(struct txrec *tx);
 
 int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
-		int days, const char *payto, const char *prkey);
+		int days, const char *payto, const struct ecc_key *ecckey);
 
 int tx_verify(const struct txrec *tx);
 

@@ -31,8 +31,7 @@ static const char txid_query[] = "select seq from txrec_pool where " \
 static const char txid_insert[] = "insert into txrec_pool(txhash, txdata) " \
 				  "values(?, ?)";
 static int txrec_verify(int sock, const struct winfo *wif,
-		unsigned char *sha_dgst, unsigned int *tx_seq,
-		MYSQL_STMT *qstmt, MYSQL_STMT *istmt)
+		unsigned char *sha_dgst, MYSQL_STMT *qstmt, MYSQL_STMT *istmt)
 {
 	int suc, mysql_retv, txcnt, numb;
 	struct txrec *tx;
@@ -53,7 +52,6 @@ static int txrec_verify(int sock, const struct winfo *wif,
 	if (suc == 0)
 		goto exit_100;
 
-	*tx_seq = 0;
 	if (mysql_stmt_execute(qstmt)) {
 		logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n", txid_query,
 				mysql_stmt_error(qstmt));
@@ -71,12 +69,10 @@ static int txrec_verify(int sock, const struct winfo *wif,
 	mysql_stmt_free_result(qstmt);
 
 exit_100:
-	if (suc == 1) {
-		if (mysql_stmt_execute(istmt)) {
-			logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n", txid_query,
-					mysql_stmt_error(qstmt));
-			suc = -1;
-		}
+	if (suc == 1 && mysql_stmt_execute(istmt)) {
+		logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n", txid_query,
+				mysql_stmt_error(qstmt));
+		suc = -1;
 	}
 	ack.wpkt.ptype = suc;
 	ack.wpkt.len = SHA_DGST_LEN;
@@ -88,6 +84,11 @@ exit_100:
 	if (numb == -1)
 		logmsg(LOG_ERR, "sendto failed: %s\n", strerror(errno));
 	return suc;
+}
+
+static int utxo_query(int sock, const struct winfo *wif)
+{
+	return 0;
 }
 
 void *tx_process(void *arg)
@@ -202,10 +203,13 @@ void *tx_process(void *arg)
 		switch(wif->wpkt.ptype) {
 		case TX_REC:
 			txrec_len = wif->wpkt.len;
-			valid = txrec_verify(wm->sock, wif, sha_dgst,
-					&tx_seq, qstmt, istmt);
+			valid = txrec_verify(wm->sock, wif, sha_dgst, qstmt,
+					istmt);
 			if (valid == 1)
 				mysql_commit(mcon);
+			break;
+		case UTXO_REQ:
+			utxo_query(wm->sock, wif);
 			break;
 		default:
 			;

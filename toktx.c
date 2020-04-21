@@ -8,7 +8,6 @@
 #include "loglog.h"
 #include "tokens.h"
 #include "toktx.h"
-#include "ecc_secp256k1.h"
 #include "base64.h"
 #include "virtmach.h"
 
@@ -52,9 +51,8 @@ void tx_destroy(struct txrec *tx)
 }
 
 struct txrec *tx_create(int tkid, unsigned long value, int days,
-		const char *payto, const char *prkey)
+		const char *payto, const struct ecc_key *ecckey)
 {
-	struct ecc_key *ecckey;
 	struct ecc_sig *eccsig;
 	int buflen, txlen, pos, retv;
 	struct timespec tm;
@@ -87,15 +85,9 @@ struct txrec *tx_create(int tkid, unsigned long value, int days,
 	if (!check_pointer(pool))
 		goto err_exit_10;
 
-	ecckey = pool;
-	eccsig = pool + sizeof(struct ecc_key);
+	eccsig = pool;
 	buf = ((void *)eccsig) + sizeof(struct ecc_sig);
 	buflen = 2048 - (buf - (char *)pool);
-	retv = ecc_key_import(ecckey, prkey);
-	if (unlikely(retv != 32)) {
-		logmsg(LOG_ERR, "Cannot import ecc private key!\n");
-		goto err_exit_20;
-	}
 
 	*tx->vins = malloc(sizeof(struct tx_etoken_in));
 	if (!check_pointer(*tx->vins))
@@ -343,12 +335,12 @@ err_exit_10:
 }
 
 int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
-		int days, const char *payto, const char *prkey)
+		int days, const char *payto, const struct ecc_key *ecckey)
 {
 	int txlen;
 	struct txrec *tx;
 
-	tx = tx_create(tkid, value, days, payto, prkey);
+	tx = tx_create(tkid, value, days, payto, ecckey);
 	if (!check_pointer(tx))
 		return -ENOMEM;
 	txlen = tx_serialize(buf, buflen, tx, 1);
