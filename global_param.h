@@ -15,10 +15,15 @@ struct thread_param {
 	int numths;
 };
 
+struct blk_mining {
+	int zbits;
+};
+
 struct global_param {
 	struct db_param db;
 	struct net_param netp;
 	struct thread_param thp;
+	struct blk_mining mine;
 };
 
 extern const struct global_param *g_param;

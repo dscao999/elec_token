@@ -14,6 +14,9 @@ static struct global_param all_param = {
 	},
 	.thp = {
 		.numths = 2
+	},
+	.mine = {
+		.zbits = 25
 	}
 };
 

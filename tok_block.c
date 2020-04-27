@@ -6,25 +6,14 @@
 #include "tok_block.h"
 #include "ripemd160.h"
 #include "loglog.h"
+#include "global_param.h"
 
 #define ZBITS	25
 
-struct tok_block_param {
-	int zbits;
-};
-
 static const unsigned short VER = 100;
-static struct tok_block_param tokcfg;
 
 static const char gensis[] = "Startup of Electronic Token Blockchain. " \
 			      "All started from Oct 2019 with Dashi Cao.";
-
-void tok_block_init(int zbits)
-{
-	if (zbits == 0)
-		zbits = ZBITS;
-	tokcfg.zbits = zbits;
-}
 
 static int num_zerobits(const unsigned char *hash)
 {
@@ -32,26 +21,34 @@ static int num_zerobits(const unsigned char *hash)
 	const unsigned char *p = hash;
 	unsigned char cb, bbit;
 
-	for (i = 0; i < 32; i++, p++) {
+	for (i = 0; i < SHA_DGST_LEN; i++, p++) {
 		cb = *p;
 		bbit = 0x80;
-		for (j = 7; j >= 0; j--) {
+		for (j = 8; j > 0; j--) {
 			if ((cb & bbit) == 0)
 				zbits++;
 			else
 				break;
 			bbit = (bbit >> 1);
 		}
-		if (j >= 0)
+		if (j > 0)
 			break;
 	}
 	return zbits;
 }
 
-static inline void blhdr_hash(struct sha256 *sha, const struct bl_header *hdr)
+static inline void blhdr_hash(unsigned char *dgst, const struct bl_header *hdr)
 {
-	sha256_reset(sha);
-	sha256(sha, (const unsigned char *)hdr, sizeof(struct bl_header));
+	sha256_dgst_2str(dgst, (const unsigned char *)hdr,
+			sizeof(struct bl_header));
+}
+
+int zbits_blkhdr(const struct bl_header *hdr)
+{
+	unsigned char dgst[SHA_DGST_LEN];
+
+	blhdr_hash(dgst, hdr);
+	return num_zerobits(dgst);
 }
 
 struct th_arg {
@@ -64,7 +61,7 @@ struct th_arg {
 
 static void *nonce_search(void *arg)
 {
-	struct sha256 sha;
+	unsigned char dgst[SHA_DGST_LEN];
 	struct th_arg *tharg = arg;
 	int zerobits = 0;
 	unsigned long nonce = tharg->hdr->nonce;
@@ -74,9 +71,9 @@ static void *nonce_search(void *arg)
 		tharg->hdr->nonce += tharg->up;
 		if (tharg->hdr->nonce == nonce)
 			break;
-		blhdr_hash(&sha, tharg->hdr);
-		zerobits = num_zerobits((const unsigned char *)sha.H);
-	} while (zerobits < tokcfg.zbits && *tharg->fin == 0);
+		blhdr_hash(dgst, tharg->hdr);
+		zerobits = num_zerobits(dgst);
+	} while (zerobits < g_param->mine.zbits && *tharg->fin == 0);
 	tharg->zbits = zerobits;
 	*tharg->fin = 1;
 	tharg->th_flag = -1;
@@ -85,7 +82,7 @@ static void *nonce_search(void *arg)
 
 static int block_mining(struct bl_header *hdr, volatile int *fin)
 {
-	struct sha256 sha;
+	unsigned char dgst[SHA_DGST_LEN];
 	struct th_arg thargs[2];
 	struct bl_header *hdrs[2];
 	pthread_t upth, downth;
@@ -93,9 +90,9 @@ static int block_mining(struct bl_header *hdr, volatile int *fin)
 	int zbits, sysret, who;
 	struct timespec tm0, tm1;
 
-	blhdr_hash(&sha, hdr);
-	zbits = num_zerobits((const unsigned char *)sha.H);
-	if (zbits >= tokcfg.zbits)
+	blhdr_hash(dgst, hdr);
+	zbits = num_zerobits(dgst);
+	if (zbits >= g_param->mine.zbits)
 		return zbits;
 	sysret = pthread_attr_init(&thattr);
 	if (sysret) {
@@ -162,12 +159,8 @@ int gensis_block(char *buf, int size)
 	struct etk_block *etblock;
 	struct bl_header *bhdr;
 	struct timespec tm;
-	union {
-		struct ripemd160 ripe;
-		struct sha256 sha;
-	} hash;
+	struct ripemd160 ripe;
 	volatile int fin = 0;
-	void *tmpbuf;
 
 	len = sizeof(gensis) + sizeof(struct etk_block);
 	if (size < len)
@@ -175,29 +168,25 @@ int gensis_block(char *buf, int size)
 	clock_gettime(CLOCK_REALTIME, &tm);
 
 	etblock = (struct etk_block *)buf;
-	etblock->txbuf = malloc(sizeof(gensis));
+	memset(etblock, 0, sizeof(struct etk_block));
+	etblock->txbuf = buf + sizeof(struct etk_block);
 	memcpy(etblock->txbuf, gensis, sizeof(gensis));
 	etblock->txbuf_len = sizeof(gensis);
-	etblock->tx_nums = 0;
 
 	bhdr = &etblock->hdr;
-	memset(bhdr, 0, sizeof(struct bl_header));
-	sha256_reset(&hash.sha);
-	sha256(&hash.sha, (const unsigned char *)etblock->txbuf, etblock->txbuf_len);
-	memcpy(bhdr->mtree_root, hash.sha.H, sizeof(bhdr->mtree_root));
+	sha256_dgst_2str(bhdr->mtree_root,
+			(const unsigned char *)etblock->txbuf, etblock->txbuf_len);
 	bhdr->ver = VER;
-	bhdr->zbits = tokcfg.zbits;
+	bhdr->zbits = g_param->mine.zbits;
 	bhdr->tm = tm.tv_sec;
-	ripemd160_reset(&hash.ripe);
-	ripemd160_dgst(&hash.ripe, (const unsigned char *)bhdr, sizeof(struct bl_header));
-	bhdr->nonce = hash.ripe.H[1];
-	bhdr->nonce = (bhdr->nonce << 32) | hash.ripe.H[0];
+	ripemd160_reset(&ripe);
+	ripemd160_dgst(&ripe, (const unsigned char *)bhdr, sizeof(struct bl_header));
+	bhdr->nonce = ripe.H[1];
+	bhdr->nonce = (bhdr->nonce << 32) | ripe.H[0];
 	
 	zbits = block_mining(bhdr, &fin);
 	logmsg(LOG_ERR, "Time used: %d milliseconds\n", zbits);
 
-	tmpbuf = etblock->txbuf;
-	memcpy(&etblock->mkerle, tmpbuf, etblock->txbuf_len);
-	free(tmpbuf);
-	return sizeof(struct etk_block) + etblock->txbuf_len - 16;
+	etblock->txbuf = NULL;
+	return sizeof(struct etk_block) + etblock->txbuf_len;
 }
