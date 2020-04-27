@@ -81,7 +81,7 @@ static int txrec_verify(int sock, const struct winfo *wif,
 	struct txrec *tx;
 	struct sockaddr_in *sockaddr;
 
-	sha256_to_str(txp->tx_query.sha_dgst,
+	sha256_dgst_2str(txp->tx_query.sha_dgst,
 			(const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
 	suc = 3;
 	tx = tx_deserialize(wif->wpkt.pkt, wif->wpkt.len);
@@ -92,6 +92,12 @@ static int txrec_verify(int sock, const struct winfo *wif,
 	if (suc == 0)
 		goto exit_100;
 
+	if (mysql_query(txp->mcon, "START TRANSACTION")) {
+		logmsg(LOG_ERR, "START TRANSACTION failed: %s\n",
+				mysql_error(txp->mcon));
+		suc = -1;
+		goto exit_100;
+	}
 	txp->tx_query.sha_len = SHA_DGST_LEN;
 	if (mysql_stmt_execute(txp->qstmt)) {
 		logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n", txid_query,
@@ -117,7 +123,10 @@ exit_100:
 				mysql_stmt_error(txp->qstmt));
 		suc = -1;
 	}
-	mysql_commit(txp->mcon);
+	if (mysql_commit(txp->mcon)) {
+		logmsg(LOG_ERR, "COMMIT failed: %s\n", mysql_error(txp->mcon));
+		suc = -1;
+	}
 	txp->wpkt.ptype = suc;
 	txp->wpkt.len = SHA_DGST_LEN;
 	sockaddr = (struct sockaddr_in *)&wif->srcaddr;
