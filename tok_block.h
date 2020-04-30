@@ -9,6 +9,17 @@ struct tree_node {
 	struct tree_node *father, *left, *right;
 };
 
+struct txrec_area {
+	unsigned long txlen;
+	unsigned char txhash[SHA_DGST_LEN];
+	unsigned char txbuf[0];
+};
+
+static inline void txrec_area_copy(struct txrec_area *dst, const struct txrec_area *src)
+{
+	memcpy(dst, src, src->txlen + sizeof(struct txrec_area));
+}
+
 struct bl_header {
 	unsigned short ver;
 	unsigned short zbits;
@@ -28,6 +39,8 @@ struct etk_block {
 	struct tree_node *mkerle;
 	void *txbuf;
 };
+
+void bl_header_init(struct bl_header *blkhdr);
 
 int zbits_blkhdr(const struct bl_header *blhd);
 int gensis_block(char *buf, int len);

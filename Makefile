@@ -20,6 +20,9 @@ tx_service: tx_service.o toktx.o tokens.o virtmach.o global_param.o \
 	wcomm.o $(eccobj)
 	$(LINK.o) $^ -lmariadb -lasound -lgmp -o $@
 
+tx_logging: tx_logging.o tok_block.o global_param.o $(eccobj)
+	$(LINK.o) $^ -lmariadb -lasound -lgmp -o $@
+
 clean:
 	rm -f *.o
 	rm -f genblk toktx tx_service

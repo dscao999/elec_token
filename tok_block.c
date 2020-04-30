@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include "tok_block.h"
 #include "ripemd160.h"
 #include "loglog.h"
@@ -189,4 +190,23 @@ int gensis_block(char *buf, int size)
 
 	etblock->txbuf = NULL;
 	return sizeof(struct etk_block) + etblock->txbuf_len;
+}
+
+void bl_header_init(struct bl_header *blkhdr)
+{
+	struct timespec tm;
+	struct ripemd160 ripe;
+
+	memset(blkhdr, 0, sizeof(struct bl_header));
+	clock_gettime(CLOCK_REALTIME, &tm);
+
+	blkhdr->tm = tm.tv_sec;
+	blkhdr->ver = VER;
+	blkhdr->zbits = g_param->mine.zbits;
+	ripemd160_reset(&ripe);
+	ripemd160_dgst(&ripe, (const unsigned char *)blkhdr,
+			sizeof(struct bl_header));
+	blkhdr->nonce = ripe.H[1];
+	blkhdr->nonce = (blkhdr->nonce << 32) | ripe.H[0];
+	blkhdr->node_id = g_param->node.nodeid;
 }

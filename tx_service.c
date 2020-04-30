@@ -343,6 +343,7 @@ exit_10:
 	txrec_info_release(txp);
 exit_5:
 	free(wif);
+	global_exit = 1;
 	return NULL;
 }
 
@@ -458,5 +459,6 @@ int main(int argc, char *argv[])
 	pthread_join(rcvthd, NULL);
 	wcomm_exit(wm);
 
+	global_param_exit();
 	return retv;
 }
