@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <assert.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
 #include <poll.h>
@@ -24,7 +25,7 @@ static volatile int global_exit = 0;
 
 static void mysig_handler(int sig)
 {
-	if (sig == SIGTERM || sig == SIGINT)
+	if (sig == SIGTERM || sig == SIGINT || sig == SIGPIPE)
 		global_exit = 1;
 }
 
@@ -198,7 +199,7 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 void *tx_process(void *arg)
 {
 	struct wcomm *wm = arg;
-	int rc;
+	int rc, ping = 0;
 	struct timespec tm;
 	const struct winfo *cwif;
 	struct winfo *wif;
@@ -329,7 +330,8 @@ void *tx_process(void *arg)
 			continue;
 		switch(wif->wpkt.ptype) {
 		case TX_REC:
-			txrec_verify(wm->sock, wif, txp);
+			if (txrec_verify(wm->sock, wif, txp) == 1)
+				write(wm->pipfd, &ping, sizeof(ping));;
 			break;
 		case UTXO_REQ:
 			utxo_do_query(wm->sock, wif, txp);
@@ -427,14 +429,18 @@ int tx_recv(int port, struct wcomm *wm)
 int main(int argc, char *argv[])
 {
 	struct wcomm *wm;
-	int retv, sysret;
+	int retv, sysret, hello = 0;
 	struct sigaction sigact;
 	pthread_t rcvthd;
+	int pipfd[2];
+	char piparg[8];
 
 	global_param_init(NULL, 1, 0);
 	wm = wcomm_init();
-	if (!wm)
+	if (!wm) {
+		global_param_exit();
 		return 1;
+	}
 
 	memset(&sigact, 0, sizeof(sigact));
 	sigact.sa_handler = mysig_handler;
@@ -447,18 +453,55 @@ int main(int argc, char *argv[])
 		logmsg(LOG_WARNING, "Cannot install signal handler for " \
 				"SIGINT: %s\n", strerror(errno));
 
+	if (pipe2(pipfd, O_DIRECT) == -1) {
+		logmsg(LOG_ERR, "pipe2 failed: %s\n", strerror(errno));
+		retv = 2;
+		goto exit_10;
+	}
+	wm->pipfd = pipfd[1];
+	switch(fork()) {
+	case 0:
+		close(pipfd[1]);
+		sprintf(piparg, "%d", pipfd[0]);
+		if (execl("./tx_logging", piparg, NULL) == -1)
+			logmsg(LOG_ERR, "execl %s failed: %s\n",
+					strerror(errno));
+		exit(1);
+	case -1:
+		logmsg(LOG_ERR, "fork failed: %s\n", strerror(errno));
+		retv = 3;
+		goto exit_20;
+	default:
+		break;
+	}
+
 	sysret = pthread_create(&rcvthd, NULL, tx_process, wm);
 	if (sysret) {
 		logmsg(LOG_ERR, "pthread create failed: %s\n",
 				strerror(errno));
-		return 2;
+		retv = 3;
+		goto exit_20;
 	}
+	sysret = write(wm->pipfd, &hello, sizeof(hello));
+	if (sysret == -1) {
+		logmsg(LOG_ERR, "Cannot write to pipe: %s\n",
+				strerror(errno));
+		global_exit = 1;
+		goto exit_30;
+	}
+
 	retv = tx_recv(g_param->netp.port, wm);
 	if (retv < 0)
 		retv = -retv;
-	pthread_join(rcvthd, NULL);
-	wcomm_exit(wm);
 
+exit_30:
+	pthread_join(rcvthd, NULL);
+
+exit_20:
+	close(pipfd[0]);
+	close(pipfd[1]);
+exit_10:
 	global_param_exit();
+	wcomm_exit(wm);
 	return retv;
 }

@@ -1,5 +1,6 @@
 
 CFLAGS += -I../include -I/usr/include/mariadb -fPIC -pthread
+CFLAGS += -D_GNU_SOURCE
 LDFLAGS += -pthread -g
 
 VPATH = ../ecc256

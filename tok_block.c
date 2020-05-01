@@ -192,7 +192,7 @@ int gensis_block(char *buf, int size)
 	return sizeof(struct etk_block) + etblock->txbuf_len;
 }
 
-void bl_header_init(struct bl_header *blkhdr)
+void bl_header_init(struct bl_header *blkhdr, const unsigned char *dgst)
 {
 	struct timespec tm;
 	struct ripemd160 ripe;
@@ -209,4 +209,5 @@ void bl_header_init(struct bl_header *blkhdr)
 	blkhdr->nonce = ripe.H[1];
 	blkhdr->nonce = (blkhdr->nonce << 32) | ripe.H[0];
 	blkhdr->node_id = g_param->node.nodeid;
+	memcpy(blkhdr->prev_hash, dgst, SHA_DGST_LEN);
 }

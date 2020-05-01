@@ -40,7 +40,7 @@ struct etk_block {
 	void *txbuf;
 };
 
-void bl_header_init(struct bl_header *blkhdr);
+void bl_header_init(struct bl_header *blkhdr, const unsigned char *dgst);
 
 int zbits_blkhdr(const struct bl_header *blhd);
 int gensis_block(char *buf, int len);
