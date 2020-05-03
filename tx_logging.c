@@ -22,7 +22,7 @@ struct dbcon {
 	MYSQL_STMT *blk_itm, *blk_q0tm, *blk_q1tm;
 	const char *txrec_query, *txrec_update, *txrec_del;
 	const char *blk_lastid, *blk_last, *blk_insert;
-	unsigned char *block;
+	struct etk_block *block;
 	unsigned char sha_dgst[SHA_DGST_LEN];
 	unsigned long shalen, blklen, blkid;
 	unsigned int seq;
@@ -308,14 +308,21 @@ static inline int blk_get_last(struct dbcon *db)
 	int retv = 0, mysql_retv;
 
 	memset(db->sha_dgst, 0, SHA_DGST_LEN);
-	if (mysql_stmt_execute(db->blk_q0tm)) {
+	if (unlikely(mysql_stmt_execute(db->blk_q0tm))) {
 		logmsg(LOG_ERR, "Cannot execute %s: %s\n", db->blk_lastid,
 				mysql_stmt_error(db->blk_q0tm));
 		return -1;
 	}
+	if (mysql_stmt_store_result(db->blk_q0tm)) {
+		logmsg(LOG_ERR, "Cannot Store the result: %s, %s\n",
+				db->blk_lastid, mysql_stmt_error(db->blk_q0tm));
+		return -1;
+	}
 	mysql_retv = mysql_stmt_fetch(db->blk_q0tm);
-	mysql_stmt_free_result(db->blk_q0tm);
-	if (mysql_retv) {
+	if (unlikely(mysql_stmt_free_result(db->blk_q0tm)))
+		logmsg(LOG_ERR, "Cannot free the result: %s, %s\n",
+				db->blk_lastid, mysql_stmt_error(db->blk_q0tm));
+	if (unlikely(mysql_retv)) {
 		logmsg(LOG_ERR, "Cannot get the last block ID: %s\n",
 				mysql_stmt_error(db->blk_q0tm));
 		return -1;
@@ -326,29 +333,32 @@ static inline int blk_get_last(struct dbcon *db)
 				mysql_stmt_error(db->blk_q1tm));
 		return -1;
 	}
+	if (unlikely(mysql_stmt_store_result(db->blk_q1tm)))
+		logmsg(LOG_ERR, "Cannot store the result: %s\n", db->blk_last,
+				mysql_stmt_error(db->blk_q1tm));
 	mysql_retv = mysql_stmt_fetch(db->blk_q1tm);
 	mysql_stmt_free_result(db->blk_q1tm);
 	if (mysql_retv) {
-		logmsg(LOG_ERR, "Cannot get the last block header: %s\n",
+		logmsg(LOG_ERR, "Cannot get the hash of last block header: %s\n",
 				mysql_stmt_error(db->blk_q1tm));
 		retv = -1;
 	}
+	assert(db->shalen == SHA_DGST_LEN);
 	return retv;
 }
 
-static int pack_txrec(struct dbcon *db)
+static int txrec_pack(struct dbcon *db)
 {
-	int mysql_retv, pos;
+	int mysql_retv, i, len;
 	struct txrec_area *txbuf;
 	struct bl_header *blkhdr;
+	unsigned char *dgst_buf, *dgst;
 
-	blkhdr = (struct bl_header *)db->block;
+	blkhdr = &db->block->hdr;
 	if (blk_get_last(db) != 0)
 		return 0;
 	bl_header_init(blkhdr, db->sha_dgst);
 
-	pos = sizeof(struct bl_header);
-	txbuf = (struct txrec_area *)(db->block + pos);
 	if (mysql_query(db->mcon, "START TRANSACTION")) {
 		logmsg(LOG_ERR, "Cannot start a transaction: %s\n",
 				mysql_error(db->mcon));
@@ -359,19 +369,19 @@ static int pack_txrec(struct dbcon *db)
 				mysql_stmt_error(db->txrec_qtm));
 		return 0;
 	}
-
 	if (mysql_stmt_store_result(db->txrec_qtm)) {
 		logmsg(LOG_ERR, "Store result failed: %s, %s\n", txrec_query,
 				mysql_stmt_error(db->txrec_qtm));
 		mysql_stmt_free_result(db->txrec_qtm);
 	}
+
+	txbuf = db->block->tx_area;
+	len = ((void *)txbuf - (void *)db->block);
 	mysql_retv = mysql_stmt_fetch(db->txrec_qtm);
-	while (mysql_retv != MYSQL_NO_DATA &&
-			pos + sizeof(struct txrec_area) + db->txbuf->txlen <
-			g_param->mine.max_blksize)  {
+	while (mysql_retv != MYSQL_NO_DATA && len + sizeof(struct txrec_area) +
+			db->txbuf->txlen <= g_param->mine.max_blksize)  {
 		txrec_area_copy(txbuf, db->txbuf);
-		pos += sizeof(struct txrec_area) + txbuf->txlen;
-		txbuf = (struct txrec_area *)(db->block + pos);
+		txbuf = txrec_area_next(txbuf);
 		if (mysql_stmt_execute(db->txrec_utm)) {
 			logmsg(LOG_ERR, "Statement Execution %s failed: %s\n",
 					txrec_update,
@@ -379,13 +389,27 @@ static int pack_txrec(struct dbcon *db)
 			break;
 		}
 		blkhdr->numtxs++;
+		len = ((void *)txbuf - (void *)db->block);
 		mysql_retv = mysql_stmt_fetch(db->txrec_qtm);
 	}
 	mysql_stmt_free_result(db->txrec_qtm);
 	if (mysql_commit(db->mcon))
 		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(db->mcon));
-	if (mysql_query(db->mcon, "COMMIT"))
-		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(db->mcon));
+
+	dgst_buf = malloc(blkhdr->numtxs*SHA_DGST_LEN);
+	if (!check_pointer(dgst_buf)) {
+		blkhdr->numtxs = 0;
+		return blkhdr->numtxs;
+	}
+	dgst = dgst_buf;
+	txbuf = db->block->tx_area;
+	for (i = 0; i < blkhdr->numtxs; i++) {
+		memcpy(dgst, txbuf->txhash, SHA_DGST_LEN);
+		txbuf = txrec_area_next(txbuf);
+		dgst += SHA_DGST_LEN;
+	}
+	sha256_dgst_2str(blkhdr->mtree_root, dgst_buf, blkhdr->numtxs*SHA_DGST_LEN);
+	free(dgst_buf);
 
 	return blkhdr->numtxs;
 }
@@ -395,13 +419,15 @@ static const char txcount_query[] = "SELECT COUNT(*) FROM txrec_pool WHERE " \
 int main(int argc, char *argv[])
 {
 	struct dbcon *dbinfo;
-	int retv = 0, numtx, sysret, mysql_retv;
+	int retv = 0, numtx, sysret, mysql_retv, zerobits;
 	unsigned long txcount;
 	struct sigaction act;
 	MYSQL_STMT *ctm;
 	MYSQL_BIND resbnd[1];
 	struct timespec intvl;
-
+	volatile int fin = 0;
+	unsigned char sha_dgst[SHA_DGST_LEN];
+	int i, elapsed;
 
 	memset(&act, 0, sizeof(act));
 	act.sa_handler = msig_handler;
@@ -467,10 +493,22 @@ int main(int argc, char *argv[])
 			nanosleep(&intvl, NULL);
 			continue;
 		}
-		numtx = pack_txrec(dbinfo);
+
+		numtx = txrec_pack(dbinfo);
 		printf("Total TX records packed: %d\n", numtx);
 		if (numtx == 0)
 			continue;
+		elapsed = block_mining((struct bl_header *)dbinfo->block, &fin);
+		zerobits = zbits_blkhdr((struct bl_header *)dbinfo->block,
+				sha_dgst);
+		fin = 0;
+		printf("Mined in %d milliseconds, leading zero bits: %d\n",
+				elapsed, zerobits);
+		printf("SHA256: ");
+		for (i = 0; i < SHA_DGST_LEN; i++)
+			printf("%02X ", sha_dgst[i]);
+		printf("\n");
+
 	} while (global_exit == 0);
 
 exit_20:

@@ -13,8 +13,8 @@
 
 static const unsigned short VER = 100;
 
-static const char gensis[] = "Startup of Electronic Token Blockchain. " \
-			      "All started from Oct 2019 with Dashi Cao.";
+static const unsigned char gensis[] = "Startup of Electronic Token " \
+				      "Blockchain. All started from Oct 2019 with Dashi Cao.";
 
 static int num_zerobits(const unsigned char *hash)
 {
@@ -44,12 +44,17 @@ static inline void blhdr_hash(unsigned char *dgst, const struct bl_header *hdr)
 			sizeof(struct bl_header));
 }
 
-int zbits_blkhdr(const struct bl_header *hdr)
+int zbits_blkhdr(const struct bl_header *hdr, unsigned char *dgst)
 {
-	unsigned char dgst[SHA_DGST_LEN];
+	unsigned char shabuf[SHA_DGST_LEN];
+	unsigned char *sha_dgst;
 
-	blhdr_hash(dgst, hdr);
-	return num_zerobits(dgst);
+	if (dgst == NULL)
+		sha_dgst = shabuf;
+	else
+		sha_dgst = dgst;
+	blhdr_hash(sha_dgst, hdr);
+	return num_zerobits(sha_dgst);
 }
 
 struct th_arg {
@@ -81,7 +86,7 @@ static void *nonce_search(void *arg)
 	return NULL;
 }
 
-static int block_mining(struct bl_header *hdr, volatile int *fin)
+int block_mining(struct bl_header *hdr, volatile int *fin)
 {
 	unsigned char dgst[SHA_DGST_LEN];
 	struct th_arg thargs[2];
@@ -89,7 +94,7 @@ static int block_mining(struct bl_header *hdr, volatile int *fin)
 	pthread_t upth, downth;
 	pthread_attr_t thattr;
 	int zbits, sysret, who;
-	struct timespec tm0, tm1;
+	struct timespec tm0, tm1, intvl;
 
 	blhdr_hash(dgst, hdr);
 	zbits = num_zerobits(dgst);
@@ -124,7 +129,6 @@ static int block_mining(struct bl_header *hdr, volatile int *fin)
 	thargs[1].th_flag = 0;
 
 	clock_gettime(CLOCK_MONOTONIC_RAW, &tm0);
-	who = 0;
 	sysret = pthread_create(&upth, &thattr, nonce_search, thargs);
 	if (unlikely(sysret)) {
 		logmsg(LOG_ERR, "pthread create failed: %s\n", strerror(sysret));
@@ -138,8 +142,10 @@ static int block_mining(struct bl_header *hdr, volatile int *fin)
 	} else
 		thargs[1].th_flag = 1;
 
+	intvl.tv_sec = 1;
+	intvl.tv_nsec = 0;
 	while (thargs[0].th_flag == 1 || thargs[1].th_flag == 1)
-		usleep(100000);
+		nanosleep(&intvl, NULL);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &tm1);
 	zbits = thargs[0].zbits;
 	who = 0;
@@ -159,37 +165,28 @@ int gensis_block(char *buf, int size)
 	int len, zbits;
 	struct etk_block *etblock;
 	struct bl_header *bhdr;
-	struct timespec tm;
-	struct ripemd160 ripe;
 	volatile int fin = 0;
 
-	len = sizeof(gensis) + sizeof(struct etk_block);
+	len = sizeof(gensis) + sizeof(struct etk_block) +
+		sizeof(struct txrec_area);
 	if (size < len)
 		return -1;
-	clock_gettime(CLOCK_REALTIME, &tm);
 
 	etblock = (struct etk_block *)buf;
 	memset(etblock, 0, sizeof(struct etk_block));
-	etblock->txbuf = buf + sizeof(struct etk_block);
-	memcpy(etblock->txbuf, gensis, sizeof(gensis));
-	etblock->txbuf_len = sizeof(gensis);
-
+	etblock->area_len = sizeof(struct txrec_area) + sizeof(gensis);
+	etblock->tx_area[0].txlen = sizeof(gensis);
+	memcpy(etblock->tx_area[0].txbuf, gensis, sizeof(gensis));
+	sha256_dgst_2str(etblock->tx_area[0].txhash, gensis, sizeof(gensis));
 	bhdr = &etblock->hdr;
-	sha256_dgst_2str(bhdr->mtree_root,
-			(const unsigned char *)etblock->txbuf, etblock->txbuf_len);
-	bhdr->ver = VER;
-	bhdr->zbits = g_param->mine.zbits;
-	bhdr->tm = tm.tv_sec;
-	ripemd160_reset(&ripe);
-	ripemd160_dgst(&ripe, (const unsigned char *)bhdr, sizeof(struct bl_header));
-	bhdr->nonce = ripe.H[1];
-	bhdr->nonce = (bhdr->nonce << 32) | ripe.H[0];
-	
+	bl_header_init(bhdr, NULL);
+	sha256_dgst_2str(bhdr->mtree_root, etblock->tx_area[0].txhash,
+			SHA_DGST_LEN);
 	zbits = block_mining(bhdr, &fin);
 	logmsg(LOG_ERR, "Time used: %d milliseconds\n", zbits);
 
-	etblock->txbuf = NULL;
-	return sizeof(struct etk_block) + etblock->txbuf_len;
+	return sizeof(struct etk_block) + etblock->tx_area[0].txlen +
+		sizeof(struct txrec_area);
 }
 
 void bl_header_init(struct bl_header *blkhdr, const unsigned char *dgst)
@@ -203,11 +200,12 @@ void bl_header_init(struct bl_header *blkhdr, const unsigned char *dgst)
 	blkhdr->tm = tm.tv_sec;
 	blkhdr->ver = VER;
 	blkhdr->zbits = g_param->mine.zbits;
+	if (dgst)
+		memcpy(blkhdr->prev_hash, dgst, SHA_DGST_LEN);
 	ripemd160_reset(&ripe);
 	ripemd160_dgst(&ripe, (const unsigned char *)blkhdr,
 			sizeof(struct bl_header));
 	blkhdr->nonce = ripe.H[1];
 	blkhdr->nonce = (blkhdr->nonce << 32) | ripe.H[0];
 	blkhdr->node_id = g_param->node.nodeid;
-	memcpy(blkhdr->prev_hash, dgst, SHA_DGST_LEN);
 }
