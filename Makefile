@@ -7,7 +7,7 @@ VPATH = ../ecc256
 
 .PHONY: all clean release
 
-all: genblk toktx ../lib/libtoktx.so tx_service
+all: genblk toktx ../lib/libtoktx.so tx_service tx_logging
 
 eccobj = ecc_secp256k1.o sha256.o dscrc.o base64.o dsaes.o ripemd160.o alsarec.o
 
@@ -26,7 +26,7 @@ tx_logging: tx_logging.o tok_block.o global_param.o $(eccobj)
 
 clean:
 	rm -f *.o
-	rm -f genblk toktx tx_service
+	rm -f genblk toktx tx_service tx_logging
 
 release: all
 

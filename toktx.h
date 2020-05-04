@@ -5,6 +5,13 @@
 #include "tokens.h"
 #include "ecc_secp256k1.h"
 
+struct txrec_vout {
+	unsigned long value;
+	unsigned char *khash;
+	unsigned short eid;
+	unsigned short vout_idx;
+};
+
 struct tx_etoken_in {
 	BYTE txid[SHA_DGST_LEN];
 	union {
@@ -45,5 +52,8 @@ int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
 		int days, const char *payto, const struct ecc_key *ecckey);
 
 int tx_verify(const struct txrec *tx);
+
+int tx_get_vout(const struct txrec *tx, struct txrec_vout *vout,
+		unsigned int *idx);
 
 #endif /* TOKTX_DSCAO__ */

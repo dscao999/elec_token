@@ -526,3 +526,20 @@ exit_20:
 		suc = 0;
 	return suc;
 }
+
+int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
+		unsigned int *idx)
+{
+	const struct tx_etoken_out *vouts, *vout;
+
+	if (*idx >= tx->vout_num)
+		return 0;
+	vouts = *tx->vouts;
+	vo->vout_idx = *idx;
+	vout = vouts + *idx;
+	vo->eid = vout->etk.token_id;
+	vo->value = vout->etk.value;
+	*idx += 1;
+
+	return *idx;
+}

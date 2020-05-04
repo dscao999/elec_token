@@ -23,7 +23,7 @@ int main(int argc, char *argv[])
 	printf("Block Header Digest: ");
 	for (i = 0; i < SHA_DGST_LEN; i++)
 		printf(" %02X", sha_dgst[i]);
-	printf(".\nNumber of leading bits: %d\n", zbits_blkhdr(hdr));
+	printf(".\nNumber of leading bits: %d\n", zbits_blkhdr(hdr, NULL));
 
 	fh = fopen("/tmp/gensis.dat", "wb");
 	fwrite(blkbuf, 1, sizeof(struct bl_header), fh);

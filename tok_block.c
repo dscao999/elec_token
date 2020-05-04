@@ -184,8 +184,8 @@ int gensis_block(char *buf, int size)
 	zbits = block_mining(bhdr, &fin);
 	logmsg(LOG_ERR, "Time used: %d milliseconds\n", zbits);
 
-	return sizeof(struct etk_block) + etblock->tx_area[0].txlen +
-		sizeof(struct txrec_area);
+	return sizeof(struct etk_block) + sizeof(struct txrec_area) +
+		etblock->tx_area[0].txlen;
 }
 
 void bl_header_init(struct bl_header *blkhdr, const unsigned char *dgst)

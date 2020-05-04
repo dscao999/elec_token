@@ -16,209 +16,270 @@ static void msig_handler(int sig)
 		global_exit = 1;
 }
 
-struct dbcon {
+struct txrec_sql {
 	MYSQL *mcon;
-	MYSQL_STMT *txrec_qtm, *txrec_utm, *txrec_dtm;
-	MYSQL_STMT *blk_itm, *blk_q0tm, *blk_q1tm;
-	const char *txrec_query, *txrec_update, *txrec_del;
-	const char *blk_lastid, *blk_last, *blk_insert;
-	struct etk_block *block;
-	unsigned char sha_dgst[SHA_DGST_LEN];
-	unsigned long shalen, blklen, blkid;
-	unsigned int seq;
-	unsigned int maplen;
-	MYSQL_BIND pmbind[2], resbind[3];
+	MYSQL_STMT *query, *update, *del;
+	const char *query_sql, *update_sql, *del_sql;
 	struct txrec_area *txbuf;
+	unsigned long hash_len;
+	unsigned int seq;
+};
+static struct txrec_sql txdb = {
+	.query_sql = "SELECT txhash, txdata, seq FROM txrec_pool" \
+		      " WHERE in_process = 0",
+	.update_sql = "UPDATE txrec_pool SET in_process = 1 where seq = ?",
+	.del_sql = "DELETE FROM txrec_pool where in_process = 1"
+};
+
+struct block_sql {
+	MYSQL *mcon;
+	MYSQL_STMT *lastid, *last, *insert;
+	const char *lastid_sql, *last_sql, *insert_sql;
+	struct etk_block *block;
+	unsigned long blkid, blklen, hash_len;
+	unsigned char blk_hash[SHA_DGST_LEN];
+};
+static struct block_sql blkdb = {
+	.lastid_sql = "SELECT MAX(blockid) FROM blockchain",
+	.last_sql = "SELECT hdr_hash FROM blockchain where blockid = ?",
+	.insert_sql = "INSERT INTO blockchain(hdr_hash, blockdata) VALUES(?, ?)"
+};
+
+struct utxo_sql {
+	MYSQL_STMT *update;
+	const char *update_sql;
+};
+
+struct dbcon {
+	struct txrec_sql *txdb;
+	struct block_sql *blkdb;
+	struct utxo_sql *utxodb;
+	MYSQL_BIND pmbind[6], resbind[3];
+	struct txrec_vout vo;
+	unsigned int maplen;
 	char connected;
 };
 
-static const char txrec_query[] = "SELECT txhash, txdata, seq FROM txrec_pool" \
-				   " WHERE in_process = 0";
-static const char txrec_update[] = "UPDATE txrec_pool SET in_process = 1" \
-				   " where seq = ?";
-static const char txrec_del[] = "DELETE FROM txrec_pool where seq = ?";
-static const char blk_lastid[] = "SELECT MAX(blockid) FROM blockchain";
-static const char blk_last[] = "SELECT hdr_hash FROM blockchain where" \
-				       " blockid = ?";
-static const char blk_insert[] = "INSERT INTO blockchain(hdr_hash, blockdata)" \
-				  "VALUES(?, ?)";
-
 static void dbcon_disconnect(struct dbcon *db);
+static void dbcon_disconnect_txdb(struct txrec_sql *txdb);
+static void dbcon_disconnect_blkdb(struct block_sql *blkdb);
 
-static int dbcon_connect(struct dbcon *db)
+static int dbcon_connect_txdb(struct dbcon *db)
 {
-	int retv;
+	int retv = 0;
+	struct txrec_sql *txdb = db->txdb;
 
-	retv = 0;
-	db->connected = 0;
-	db->mcon = mysql_init(NULL);
-	if (!check_pointer(db->mcon))
+	txdb->mcon = mysql_init(NULL);
+	if (!check_pointer(txdb->mcon))
 		return -ENOMEM;
-	if (mysql_real_connect(db->mcon, g_param->db.host, g_param->db.user,
-				g_param->db.passwd, g_param->db.dbname,
-				0, NULL, 0) == NULL) {
+	if (mysql_real_connect(txdb->mcon, g_param->db.host,
+				g_param->db.user, g_param->db.passwd,
+				g_param->db.dbname, 0, NULL, 0) == NULL) {
 		logmsg(LOG_ERR, "mysql_real_connect failed: %s\n",
-				mysql_error(db->mcon));
+				mysql_error(txdb->mcon));
 		retv = -2;
 		goto err_exit_10;
 	}
-	db->txrec_qtm = mysql_stmt_init(db->mcon);
-	if (!check_pointer(db->txrec_qtm)) {
+	txdb->query = mysql_stmt_init(txdb->mcon);
+	if (!check_pointer(txdb->query)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
 	}
-	if (mysql_stmt_prepare(db->txrec_qtm, db->txrec_query,
-				strlen(db->txrec_query))) {
+	if (mysql_stmt_prepare(txdb->query, txdb->query_sql,
+				strlen(txdb->query_sql))) {
 		logmsg(LOG_ERR, "Prepare Statement Failed: %s, %s\n",
-				db->txrec_query,
-				mysql_stmt_error(db->txrec_qtm));
+				txdb->query_sql,
+				mysql_stmt_error(txdb->query));
 		retv = -3;
 		goto err_exit_10;
 	}
-	memset(db->resbind, 0, sizeof(db->resbind));
+	memset(db->resbind, 0, 3*sizeof(MYSQL_BIND));
 	db->resbind[0].buffer_type = MYSQL_TYPE_BLOB;
-	db->resbind[0].buffer = db->txbuf->txhash;
+	db->resbind[0].buffer = txdb->txbuf->txhash;
 	db->resbind[0].buffer_length = SHA_DGST_LEN;
-	db->resbind[0].length = &db->shalen;
+	db->resbind[0].length = &txdb->hash_len;
 	db->resbind[1].buffer_type = MYSQL_TYPE_BLOB;
-	db->resbind[1].buffer = db->txbuf->txbuf;
+	db->resbind[1].buffer = txdb->txbuf->txbuf;
 	db->resbind[1].buffer_length = g_param->tx.max_txsize;
-	db->resbind[1].length = &db->txbuf->txlen;
+	db->resbind[1].length = &txdb->txbuf->txlen;
 	db->resbind[2].buffer_type = MYSQL_TYPE_LONG;
-	db->resbind[2].buffer = &db->seq;
+	db->resbind[2].buffer = &txdb->seq;
 	db->resbind[2].is_unsigned = 1;
-	if (mysql_stmt_bind_result(db->txrec_qtm, db->resbind)) {
-		logmsg(LOG_ERR, "bind result failed: %s\n",
-				mysql_stmt_error(db->txrec_qtm));
+	if (mysql_stmt_bind_result(txdb->query, db->resbind)) {
+		logmsg(LOG_ERR, "bind result failed: %s, %s\n",
+				txdb->query_sql,
+				mysql_stmt_error(txdb->query));
 		retv = -4;
 		goto err_exit_10;
 	}
 
-	db->txrec_utm = mysql_stmt_init(db->mcon);
-	if (!check_pointer(db->txrec_utm)) {
+	txdb->update = mysql_stmt_init(txdb->mcon);
+	if (!check_pointer(txdb->update)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
 	}
-	if (mysql_stmt_prepare(db->txrec_utm, db->txrec_update,
-				strlen(db->txrec_update))) {
+	if (mysql_stmt_prepare(txdb->update, txdb->update_sql,
+				strlen(txdb->update_sql))) {
 		logmsg(LOG_ERR, "Prepare Statement Failed: %s, %s\n",
-				db->txrec_update,
-				mysql_stmt_error(db->txrec_utm));
+				txdb->update_sql,
+				mysql_stmt_error(txdb->update));
 		retv = -3;
 		goto err_exit_10;
 	}
 	memset(db->pmbind, 0, sizeof(MYSQL_BIND));
 	db->pmbind[0].buffer_type = MYSQL_TYPE_LONG;
-	db->pmbind[0].buffer = &db->seq;
+	db->pmbind[0].buffer = &txdb->seq;
 	db->pmbind[0].is_unsigned = 1;
-	if (mysql_stmt_bind_param(db->txrec_utm, db->pmbind)) {
+	if (mysql_stmt_bind_param(txdb->update, db->pmbind)) {
 		logmsg(LOG_ERR, "Param Bind failed: %s, %s\n",
-				db->txrec_update,
-				mysql_stmt_error(db->txrec_utm));
+				txdb->update_sql,
+				mysql_stmt_error(txdb->update));
 		retv = -4;
 		goto err_exit_10;
 	}
 
-	db->txrec_dtm = mysql_stmt_init(db->mcon);
-	if (!check_pointer(db->txrec_dtm)) {
+	txdb->del = mysql_stmt_init(txdb->mcon);
+	if (!check_pointer(txdb->del)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
 	}
-	if (mysql_stmt_prepare(db->txrec_dtm, db->txrec_del,
-				strlen(db->txrec_del))) {
+	if (mysql_stmt_prepare(txdb->del, txdb->del_sql,
+				strlen(txdb->del_sql))) {
 		logmsg(LOG_ERR, "Prepare Statement Failed: %s, %s\n",
-				db->txrec_del, mysql_stmt_error(db->txrec_dtm));
+				txdb->del_sql,
+				mysql_stmt_error(txdb->del));
 		retv = -3;
 		goto err_exit_10;
 	}
-	if (mysql_stmt_bind_param(db->txrec_dtm, db->pmbind)) {
-		logmsg(LOG_ERR, "Param Bind failed: %s, %s\n",
-				db->txrec_del, mysql_stmt_error(db->txrec_dtm));
-		retv = -4;
+
+	return retv;
+
+err_exit_10:
+	dbcon_disconnect_txdb(txdb);
+	return retv;
+}
+
+static int dbcon_connect_blkdb(struct dbcon *db)
+{
+	struct block_sql *blkdb = db->blkdb;
+	int retv = 0;
+
+	blkdb->mcon = mysql_init(NULL);
+	if (!check_pointer(blkdb->mcon))
+		return -ENOMEM;
+	if (mysql_real_connect(blkdb->mcon, g_param->db.host, g_param->db.user,
+				g_param->db.passwd, g_param->db.dbname,
+				0, NULL, 0) == NULL) {
+		logmsg(LOG_ERR, "mysql_real_connect failed: %s\n",
+				mysql_error(blkdb->mcon));
+		retv = -2;
 		goto err_exit_10;
 	}
-
-	db->blk_q0tm = mysql_stmt_init(db->mcon);
-	if (!check_pointer(db->blk_q0tm)) {
+	blkdb->lastid = mysql_stmt_init(blkdb->mcon);
+	if (!check_pointer(blkdb->lastid)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
 	}
-	if (mysql_stmt_prepare(db->blk_q0tm, db->blk_lastid,
-				strlen(db->blk_lastid))) {
+	if (mysql_stmt_prepare(blkdb->lastid, blkdb->lastid_sql,
+				strlen(blkdb->lastid_sql))) {
 		logmsg(LOG_ERR, "Prepare Statement Failed: %s, %s\n",
-				db->blk_lastid, mysql_stmt_error(db->blk_q0tm));
+				blkdb->lastid_sql,
+				mysql_stmt_error(blkdb->lastid));
 		retv = -3;
 		goto err_exit_10;
 	}
 	memset(db->resbind, 0, sizeof(MYSQL_BIND));
 	db->resbind[0].buffer_type = MYSQL_TYPE_LONGLONG;
-	db->resbind[0].buffer = &db->blkid;
+	db->resbind[0].buffer = &blkdb->blkid;
 	db->resbind[0].is_unsigned = 1;
-	if (mysql_stmt_bind_result(db->blk_q0tm, db->resbind)) {
-		logmsg(LOG_ERR, "Cannot bind result: %s, %s\n", db->blk_lastid,
-				mysql_stmt_error(db->blk_q0tm));
+	if (mysql_stmt_bind_result(blkdb->lastid, db->resbind)) {
+		logmsg(LOG_ERR, "Cannot bind result: %s, %s\n",
+				blkdb->lastid_sql,
+				mysql_stmt_error(blkdb->lastid));
 		goto err_exit_10;
 	}
 
-	db->blk_q1tm = mysql_stmt_init(db->mcon);
-	if (!check_pointer(db->blk_q1tm)) {
+	blkdb->last = mysql_stmt_init(blkdb->mcon);
+	if (!check_pointer(blkdb->last)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
 	}
-	if (mysql_stmt_prepare(db->blk_q1tm, db->blk_last,
-				strlen(db->blk_last))) {
+	if (mysql_stmt_prepare(blkdb->last, blkdb->last_sql,
+				strlen(blkdb->last_sql))) {
 		logmsg(LOG_ERR, "Prepare Statement Failed: %s, %s\n",
-				db->blk_last, mysql_stmt_error(db->blk_q1tm));
+				blkdb->last_sql,
+				mysql_stmt_error(blkdb->last));
 		retv = -3;
 		goto err_exit_10;
 	}
 	memset(db->pmbind, 0, sizeof(MYSQL_BIND));
 	db->pmbind[0].buffer_type = MYSQL_TYPE_LONGLONG;
-	db->pmbind[0].buffer = &db->blkid;
+	db->pmbind[0].buffer = &blkdb->blkid;
 	db->pmbind[0].is_unsigned = 1;
-	if (mysql_stmt_bind_param(db->blk_q1tm, db->pmbind)) {
-		logmsg(LOG_ERR, "Cannot bind Param: %s, %s\n", db->blk_last,
-				mysql_stmt_error(db->blk_q1tm));
+	if (mysql_stmt_bind_param(blkdb->last, db->pmbind)) {
+		logmsg(LOG_ERR, "Cannot bind Param: %s, %s\n", blkdb->last_sql,
+				mysql_stmt_error(blkdb->last));
 		goto err_exit_10;
 	}
 	memset(db->resbind, 0, sizeof(MYSQL_BIND));
 	db->resbind[0].buffer_type = MYSQL_TYPE_BLOB;
-	db->resbind[0].buffer = db->sha_dgst;
+	db->resbind[0].buffer = blkdb->blk_hash;
 	db->resbind[0].buffer_length = SHA_DGST_LEN;
-	db->resbind[0].length = &db->shalen;
-	if (mysql_stmt_bind_result(db->blk_q1tm, db->resbind)) {
-		logmsg(LOG_ERR, "Cannot bind Param: %s, %s\n", db->blk_last,
-				mysql_stmt_error(db->blk_q1tm));
+	db->resbind[0].length = &blkdb->hash_len;
+	if (mysql_stmt_bind_result(blkdb->last, db->resbind)) {
+		logmsg(LOG_ERR, "Cannot bind Param: %s, %s\n",
+				blkdb->last_sql,
+				mysql_stmt_error(blkdb->last));
 		goto err_exit_10;
 	}
 
-	db->blk_itm = mysql_stmt_init(db->mcon);
-	if (!check_pointer(db->blk_itm)) {
+	blkdb->insert = mysql_stmt_init(blkdb->mcon);
+	if (!check_pointer(blkdb->insert)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
 	}
-	if (mysql_stmt_prepare(db->blk_itm, db->blk_insert,
-				strlen(db->blk_insert))) {
+	if (mysql_stmt_prepare(blkdb->insert, blkdb->insert_sql,
+				strlen(blkdb->insert_sql))) {
 		logmsg(LOG_ERR, "Prepare Statement Failed: %s, %s\n",
-				db->blk_insert, mysql_stmt_error(db->blk_itm));
+				blkdb->insert_sql,
+				mysql_stmt_error(blkdb->insert));
 		retv = -3;
 		goto err_exit_10;
 	}
 	memset(db->pmbind, 0, 2*sizeof(MYSQL_BIND));
 	db->pmbind[0].buffer_type = MYSQL_TYPE_BLOB;
-	db->pmbind[0].buffer = db->sha_dgst;
+	db->pmbind[0].buffer = blkdb->blk_hash;
 	db->pmbind[0].buffer_length = SHA_DGST_LEN;
-	db->pmbind[0].length = &db->shalen;
+	db->pmbind[0].length = &blkdb->hash_len;
 	db->pmbind[1].buffer_type = MYSQL_TYPE_BLOB;
-	db->pmbind[1].buffer = db->block;
+	db->pmbind[1].buffer = blkdb->block;
 	db->pmbind[1].buffer_length = g_param->mine.max_blksize;
-	db->pmbind[1].length = &db->blklen;
-	if (mysql_stmt_bind_param(db->blk_itm, db->pmbind)) {
+	db->pmbind[1].length = &blkdb->blklen;
+	if (mysql_stmt_bind_param(blkdb->insert, db->pmbind)) {
 		logmsg(LOG_ERR, "Param Bind failed: %s, %s\n",
-				db->blk_insert, mysql_stmt_error(db->blk_itm));
+				blkdb->insert_sql,
+				mysql_stmt_error(blkdb->insert));
 		retv = -4;
 		goto err_exit_10;
 	}
+
+	return retv;
+
+err_exit_10:
+	dbcon_disconnect_blkdb(blkdb);
+	return retv;
+}
+
+static int dbcon_connect(struct dbcon *db)
+{
+	int retv = 0;
+
+	retv = dbcon_connect_txdb(db);
+	if (retv)
+		goto err_exit_10;
+	retv = dbcon_connect_blkdb(db);
+	if (retv)
+		goto err_exit_10;
 
 	db->connected = 1;
 	return retv;
@@ -228,36 +289,51 @@ err_exit_10:
 	return retv;
 }
 
+static void dbcon_disconnect_txdb(struct txrec_sql *txdb)
+{
+	if (txdb->query) {
+		mysql_stmt_close(txdb->query);
+		txdb->query = NULL;
+	}
+	if (txdb->update) {
+		mysql_stmt_close(txdb->update);
+		txdb->update = NULL;
+	}
+	if (txdb->del) {
+		mysql_stmt_close(txdb->del);
+		txdb->del = NULL;
+	}
+	if (txdb->mcon) {
+		mysql_close(txdb->mcon);
+		txdb->mcon = NULL;
+	}
+}
+
+static void dbcon_disconnect_blkdb(struct block_sql *blkdb)
+{
+	if (blkdb->lastid) {
+		mysql_stmt_close(blkdb->lastid);
+		blkdb->lastid = NULL;
+	}
+	if (blkdb->last) {
+		mysql_stmt_close(blkdb->last);
+		blkdb->last = NULL;
+	}
+	if (blkdb->insert) {
+		mysql_stmt_close(blkdb->insert);
+		blkdb->insert = NULL;
+	}
+	if (blkdb->mcon) {
+		mysql_close(blkdb->mcon);
+		blkdb->mcon = NULL;
+	}
+}
+
 static void dbcon_disconnect(struct dbcon *db)
 {
-	if (db->txrec_qtm) {
-		mysql_stmt_close(db->txrec_qtm);
-		db->txrec_qtm = NULL;
-	}
-	if (db->txrec_utm) {
-		mysql_stmt_close(db->txrec_utm);
-		db->txrec_utm = NULL;
-	}
-	if (db->txrec_dtm) {
-		mysql_stmt_close(db->txrec_dtm);
-		db->txrec_dtm = NULL;
-	}
-	if (db->blk_q0tm) {
-		mysql_stmt_close(db->blk_q0tm);
-		db->blk_q0tm = NULL;
-	}
-	if (db->blk_q1tm) {
-		mysql_stmt_close(db->blk_q1tm);
-		db->blk_q1tm = NULL;
-	}
-	if (db->blk_itm) {
-		mysql_stmt_close(db->blk_itm);
-		db->blk_itm = NULL;
-	}
-	if (db->mcon) {
-		mysql_close(db->mcon);
-		db->mcon = NULL;
-	}
+
+	dbcon_disconnect_blkdb(db->blkdb);
+	dbcon_disconnect_txdb(db->txdb);
 	db->connected = 0;
 }
 
@@ -285,15 +361,12 @@ static struct dbcon *dbcon_init(void)
 	dbinfo = madr;
 	memset(dbinfo, 0, sizeof(struct dbcon));
 	dbinfo->maplen = maplen;
-	dbinfo->txrec_query = txrec_query;
-	dbinfo->txrec_update = txrec_update;
-	dbinfo->txrec_del = txrec_del;
-	dbinfo->blk_lastid = blk_lastid;
-	dbinfo->blk_last = blk_last;
-	dbinfo->blk_insert = blk_insert;
+	dbinfo->txdb = &txdb;
+	dbinfo->blkdb = &blkdb;
 
-	dbinfo->txbuf = madr + sizeof(struct dbcon);
-	dbinfo->block = madr + sizeof(struct dbcon) + g_param->tx.max_txsize;
+	dbinfo->txdb->txbuf = madr + sizeof(struct dbcon);
+	dbinfo->blkdb->block = madr + sizeof(struct dbcon) +
+		g_param->tx.max_txsize;
 
 	if (dbcon_connect(dbinfo)) {
 		dbcon_exit(dbinfo);
@@ -303,116 +376,130 @@ static struct dbcon *dbcon_init(void)
 	return dbinfo;
 }
 
-static int blk_get_lastid(struct dbcon *db)
+static unsigned long blk_get_lastid(struct dbcon *db)
 {
 	int mysql_retv;
 
-	if (unlikely(mysql_stmt_execute(db->blk_q0tm))) {
-		logmsg(LOG_ERR, "Cannot execute %s: %s\n", db->blk_lastid,
-				mysql_stmt_error(db->blk_q0tm));
-		return -1;
+	if (unlikely(mysql_stmt_execute(db->blkdb->lastid))) {
+		logmsg(LOG_ERR, "Cannot execute %s: %s\n",
+				db->blkdb->lastid,
+				mysql_stmt_error(db->blkdb->lastid));
+		return 0;
 	}
-	if (mysql_stmt_store_result(db->blk_q0tm)) {
+	if (mysql_stmt_store_result(db->blkdb->lastid)) {
 		logmsg(LOG_ERR, "Cannot Store the result: %s, %s\n",
-				db->blk_lastid, mysql_stmt_error(db->blk_q0tm));
-		return -1;
+				db->blkdb->lastid_sql,
+				mysql_stmt_error(db->blkdb->lastid));
+		return 0;
 	}
-	mysql_retv = mysql_stmt_fetch(db->blk_q0tm);
-	if (unlikely(mysql_stmt_free_result(db->blk_q0tm)))
+	mysql_retv = mysql_stmt_fetch(db->blkdb->lastid);
+	if (unlikely(mysql_stmt_free_result(db->blkdb->lastid)))
 		logmsg(LOG_ERR, "Cannot free the result: %s, %s\n",
-				db->blk_lastid, mysql_stmt_error(db->blk_q0tm));
+				db->blkdb->lastid_sql,
+				mysql_stmt_error(db->blkdb->lastid));
 	if (unlikely(mysql_retv)) {
-		logmsg(LOG_ERR, "Cannot get the last block ID: %s\n",
-				mysql_stmt_error(db->blk_q0tm));
-		return -1;
+		logmsg(LOG_ERR, "Cannot get the last block ID: %s, %s\n",
+				db->blkdb->lastid_sql,
+				mysql_stmt_error(db->blkdb->lastid));
+		return 0;
 	}
-	return db->blkid;
+	return db->blkdb->blkid;
 }
 
 static int blk_get_last(struct dbcon *db)
 {
 	int retv = 0, mysql_retv;
 
-	memset(db->sha_dgst, 0, SHA_DGST_LEN);
+	memset(db->blkdb->blk_hash, 0, SHA_DGST_LEN);
 
-	blk_get_lastid(db);
-	if (unlikely(mysql_stmt_execute(db->blk_q1tm))) {
-		logmsg(LOG_ERR, "Cannot execute %s: %s\n", db->blk_last,
-				mysql_stmt_error(db->blk_q1tm));
+	if (blk_get_lastid(db) == 0)
+		return -1;
+	if (unlikely(mysql_stmt_execute(db->blkdb->last))) {
+		logmsg(LOG_ERR, "Cannot execute %s: %s\n",
+				db->blkdb->last_sql,
+				mysql_stmt_error(db->blkdb->last));
 		return -1;
 	}
-	if (unlikely(mysql_stmt_store_result(db->blk_q1tm)))
-		logmsg(LOG_ERR, "Cannot store the result: %s\n", db->blk_last,
-				mysql_stmt_error(db->blk_q1tm));
-	mysql_retv = mysql_stmt_fetch(db->blk_q1tm);
-	mysql_stmt_free_result(db->blk_q1tm);
+	if (unlikely(mysql_stmt_store_result(db->blkdb->last)))
+		logmsg(LOG_ERR, "Cannot store the result: %s\n",
+				db->blkdb->last,
+				mysql_stmt_error(db->blkdb->last));
+	mysql_retv = mysql_stmt_fetch(db->blkdb->last);
+	mysql_stmt_free_result(db->blkdb->last);
 	if (mysql_retv) {
 		logmsg(LOG_ERR, "Cannot get the hash of last block header: %s\n",
-				mysql_stmt_error(db->blk_q1tm));
+				mysql_stmt_error(db->blkdb->last));
 		retv = -1;
 	}
-	assert(db->shalen == SHA_DGST_LEN);
+	assert(db->blkdb->hash_len == SHA_DGST_LEN);
 	return retv;
 }
 
 static int txrec_pack(struct dbcon *db)
 {
 	int mysql_retv, i, len;
+	struct txrec_sql *txdb = db->txdb;
 	struct txrec_area *txbuf;
 	struct bl_header *blkhdr;
 	unsigned char *dgst_buf, *dgst;
 
-	blkhdr = &db->block->hdr;
+	blkhdr = &db->blkdb->block->hdr;
 	if (blk_get_last(db) != 0)
 		return 0;
-	bl_header_init(blkhdr, db->sha_dgst);
+	bl_header_init(blkhdr, db->blkdb->blk_hash);
+	printf("Last block ID: %lu\n", db->blkdb->blkid);
 
-	if (mysql_query(db->mcon, "START TRANSACTION")) {
+	if (mysql_query(txdb->mcon, "START TRANSACTION")) {
 		logmsg(LOG_ERR, "Cannot start a transaction: %s\n",
-				mysql_error(db->mcon));
+				mysql_error(txdb->mcon));
 		return 0;
 	}
-	if (mysql_stmt_execute(db->txrec_qtm)) {
+	if (mysql_stmt_execute(txdb->query)) {
 		logmsg(LOG_ERR, "failed to do txrec_pool query: %s\n",
-				mysql_stmt_error(db->txrec_qtm));
-		return 0;
+				mysql_stmt_error(txdb->query));
+		goto err_exit_10;
 	}
-	if (mysql_stmt_store_result(db->txrec_qtm)) {
-		logmsg(LOG_ERR, "Store result failed: %s, %s\n", txrec_query,
-				mysql_stmt_error(db->txrec_qtm));
-		mysql_stmt_free_result(db->txrec_qtm);
+	if (mysql_stmt_store_result(txdb->query)) {
+		logmsg(LOG_ERR, "Store result failed: %s, %s\n",
+				txdb->query_sql,
+				mysql_stmt_error(txdb->query));
+		mysql_stmt_free_result(txdb->query);
+		goto err_exit_10;
 	}
 
-	txbuf = db->block->tx_area;
-	len = ((void *)txbuf - (void *)db->block);
-	mysql_retv = mysql_stmt_fetch(db->txrec_qtm);
+	txbuf = db->blkdb->block->tx_area;
+	len = ((void *)txbuf - (void *)db->blkdb->block);
+	mysql_retv = mysql_stmt_fetch(txdb->query);
 	while (mysql_retv != MYSQL_NO_DATA && len + sizeof(struct txrec_area) +
-			db->txbuf->txlen <= g_param->mine.max_blksize)  {
-		txrec_area_copy(txbuf, db->txbuf);
+			txdb->txbuf->txlen <= g_param->mine.max_blksize)  {
+		txrec_area_copy(txbuf, txdb->txbuf);
 		txbuf = txrec_area_next(txbuf);
-		if (mysql_stmt_execute(db->txrec_utm)) {
+		if (mysql_stmt_execute(txdb->update)) {
 			logmsg(LOG_ERR, "Statement Execution %s failed: %s\n",
-					txrec_update,
-					mysql_stmt_error(db->txrec_utm));
+					txdb->update_sql,
+					mysql_stmt_error(txdb->update));
 			break;
 		}
 		blkhdr->numtxs++;
-		len = ((void *)txbuf - (void *)db->block);
-		mysql_retv = mysql_stmt_fetch(db->txrec_qtm);
+		len = ((void *)txbuf - (void *)db->blkdb->block);
+		mysql_retv = mysql_stmt_fetch(txdb->query);
 	}
-	mysql_stmt_free_result(db->txrec_qtm);
-	if (mysql_commit(db->mcon))
-		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(db->mcon));
+	mysql_stmt_free_result(txdb->query);
+	if (mysql_commit(txdb->mcon))
+		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(txdb->mcon));
 
-	db->blklen = len;
-	db->block->area_len = len - sizeof(struct etk_block);
+	if (blkhdr->numtxs == 0)
+		return blkhdr->numtxs;
+
+	db->blkdb->blklen = len;
+	db->blkdb->block->area_len = len - sizeof(struct etk_block);
 	dgst_buf = malloc(blkhdr->numtxs*SHA_DGST_LEN);
 	if (!check_pointer(dgst_buf)) {
 		blkhdr->numtxs = 0;
 		return blkhdr->numtxs;
 	}
 	dgst = dgst_buf;
-	txbuf = db->block->tx_area;
+	txbuf = db->blkdb->block->tx_area;
 	for (i = 0; i < blkhdr->numtxs; i++) {
 		memcpy(dgst, txbuf->txhash, SHA_DGST_LEN);
 		txbuf = txrec_area_next(txbuf);
@@ -422,21 +509,22 @@ static int txrec_pack(struct dbcon *db)
 	free(dgst_buf);
 
 	return blkhdr->numtxs;
+
+err_exit_10:
+	if (mysql_commit(txdb->mcon))
+		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(txdb->mcon));
+	return 0;
 }
 
-static const char txcount_query[] = "SELECT COUNT(*) FROM txrec_pool WHERE " \
-				    "in_process = 0";
 int main(int argc, char *argv[])
 {
 	struct dbcon *dbinfo;
-	int retv = 0, numtx, sysret, mysql_retv, zerobits;
-	unsigned long txcount;
+	int retv = 0, numtx, sysret, zerobits;
 	struct sigaction act;
-	MYSQL_STMT *ctm;
-	MYSQL_BIND resbnd[1];
 	struct timespec intvl;
 	volatile int fin = 0;
 	int i, elapsed;
+	unsigned char sha_dgst[SHA_DGST_LEN];
 
 	memset(&act, 0, sizeof(act));
 	act.sa_handler = msig_handler;
@@ -456,73 +544,27 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	ctm = mysql_stmt_init(dbinfo->mcon);
-	if (!check_pointer(ctm)) {
-		logmsg(LOG_ERR, "Cannot get a statement handle: %s\n",
-				mysql_error(dbinfo->mcon));
-		retv = 2;
-		goto exit_10;
-	}
-	if (mysql_stmt_prepare(ctm, txcount_query, strlen(txcount_query))) {
-		logmsg(LOG_ERR, "Cannot prepare %s: %s\n", txcount_query,
-				mysql_stmt_error(ctm));
-		retv = 2;
-		goto exit_20;
-	}
-	memset(resbnd, 0, sizeof(resbnd));
-	resbnd[0].buffer_type = MYSQL_TYPE_LONGLONG;
-	resbnd[0].buffer = &txcount;
-	resbnd[0].is_unsigned = 1;
-	if (mysql_stmt_bind_result(ctm, resbnd)) {
-		logmsg(LOG_ERR, "Cannot bind result, %s: %s\n", txcount_query,
-				mysql_stmt_error(ctm));
-		retv = 2;
-		goto exit_20;
-	}
-
 	intvl.tv_sec = 1;
 	intvl.tv_nsec = 0;
+	global_exit = 1;
 	do {
-		if (mysql_stmt_execute(ctm)) {
-			logmsg(LOG_ERR, "Cannot execute %s: %s\n",
-					txcount_query, mysql_stmt_error(ctm));
-			retv = 2;
-			goto exit_20;
-		}
-		mysql_stmt_store_result(ctm);
-		mysql_retv = mysql_stmt_fetch(ctm);
-		mysql_stmt_free_result(ctm);
-		if (mysql_retv) {
-			logmsg(LOG_ERR, "No result from %s: %s\n",
-					txcount_query, mysql_stmt_error(ctm));
-			retv = 3;
-			goto exit_20;
-		}
-		if (txcount == 0) {
+		numtx = txrec_pack(dbinfo);
+		printf("Total TX records packed: %d\n", numtx);
+		if (numtx == 0) {
 			nanosleep(&intvl, NULL);
 			continue;
 		}
-
-		numtx = txrec_pack(dbinfo);
-		printf("Total TX records packed: %d\n", numtx);
-		if (numtx == 0)
-			continue;
-		elapsed = block_mining((struct bl_header *)dbinfo->block, &fin);
-		zerobits = zbits_blkhdr((struct bl_header *)dbinfo->block,
-				dbinfo->sha_dgst);
+		elapsed = block_mining(&dbinfo->blkdb->block->hdr, &fin);
+		zerobits = zbits_blkhdr(&dbinfo->blkdb->block->hdr, sha_dgst);
 		fin = 0;
 		printf("Mined in %d milliseconds, leading zero bits: %d\n",
 				elapsed, zerobits);
 		printf("SHA256: ");
 		for (i = 0; i < SHA_DGST_LEN; i++)
-			printf("%02X ", dbinfo->sha_dgst[i]);
+			printf("%02X ", sha_dgst[i]);
 		printf("\n");
-
 	} while (global_exit == 0);
 
-exit_20:
-	mysql_stmt_close(ctm);
-exit_10:
 	dbcon_exit(dbinfo);
 	global_param_exit();
 	return retv;

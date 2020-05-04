@@ -463,7 +463,7 @@ int main(int argc, char *argv[])
 	case 0:
 		close(pipfd[1]);
 		sprintf(piparg, "%d", pipfd[0]);
-		if (execl("./tx_logging", piparg, NULL) == -1)
+		if (execl("./tx_logging", "tx_logging", piparg, NULL) == -1)
 			logmsg(LOG_ERR, "execl %s failed: %s\n",
 					strerror(errno));
 		exit(1);

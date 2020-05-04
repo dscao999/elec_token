@@ -3,6 +3,7 @@
 #include <string.h>
 #include "sha256.h"
 #include "ecc_secp256k1.h"
+#include "toktx.h"
 
 struct txrec_area {
 	unsigned long txlen;
@@ -43,5 +44,10 @@ void bl_header_init(struct bl_header *blkhdr, const unsigned char *dgst);
 int zbits_blkhdr(const struct bl_header *blhd, unsigned char *dgst);
 int block_mining(struct bl_header *hdr, volatile int *fin);
 int gensis_block(char *buf, int len);
+
+static inline struct txrec *txrec_area_deser(const struct txrec_area *txbuf)
+{
+	return tx_deserialize((const char *)txbuf->txbuf, txbuf->txlen);
+}
 
 #endif /* TOK_BLOCK_DSCAO__ */
