@@ -303,11 +303,10 @@ static struct dbcon *dbcon_init(void)
 	return dbinfo;
 }
 
-static inline int blk_get_last(struct dbcon *db)
+static int blk_get_lastid(struct dbcon *db)
 {
-	int retv = 0, mysql_retv;
+	int mysql_retv;
 
-	memset(db->sha_dgst, 0, SHA_DGST_LEN);
 	if (unlikely(mysql_stmt_execute(db->blk_q0tm))) {
 		logmsg(LOG_ERR, "Cannot execute %s: %s\n", db->blk_lastid,
 				mysql_stmt_error(db->blk_q0tm));
@@ -327,8 +326,17 @@ static inline int blk_get_last(struct dbcon *db)
 				mysql_stmt_error(db->blk_q0tm));
 		return -1;
 	}
+	return db->blkid;
+}
 
-	if (mysql_stmt_execute(db->blk_q1tm)) {
+static int blk_get_last(struct dbcon *db)
+{
+	int retv = 0, mysql_retv;
+
+	memset(db->sha_dgst, 0, SHA_DGST_LEN);
+
+	blk_get_lastid(db);
+	if (unlikely(mysql_stmt_execute(db->blk_q1tm))) {
 		logmsg(LOG_ERR, "Cannot execute %s: %s\n", db->blk_last,
 				mysql_stmt_error(db->blk_q1tm));
 		return -1;
@@ -396,6 +404,8 @@ static int txrec_pack(struct dbcon *db)
 	if (mysql_commit(db->mcon))
 		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(db->mcon));
 
+	db->blklen = len;
+	db->block->area_len = len - sizeof(struct etk_block);
 	dgst_buf = malloc(blkhdr->numtxs*SHA_DGST_LEN);
 	if (!check_pointer(dgst_buf)) {
 		blkhdr->numtxs = 0;
@@ -426,7 +436,6 @@ int main(int argc, char *argv[])
 	MYSQL_BIND resbnd[1];
 	struct timespec intvl;
 	volatile int fin = 0;
-	unsigned char sha_dgst[SHA_DGST_LEN];
 	int i, elapsed;
 
 	memset(&act, 0, sizeof(act));
@@ -500,13 +509,13 @@ int main(int argc, char *argv[])
 			continue;
 		elapsed = block_mining((struct bl_header *)dbinfo->block, &fin);
 		zerobits = zbits_blkhdr((struct bl_header *)dbinfo->block,
-				sha_dgst);
+				dbinfo->sha_dgst);
 		fin = 0;
 		printf("Mined in %d milliseconds, leading zero bits: %d\n",
 				elapsed, zerobits);
 		printf("SHA256: ");
 		for (i = 0; i < SHA_DGST_LEN; i++)
-			printf("%02X ", sha_dgst[i]);
+			printf("%02X ", dbinfo->sha_dgst[i]);
 		printf("\n");
 
 	} while (global_exit == 0);

@@ -77,8 +77,7 @@ static void *nonce_search(void *arg)
 		tharg->hdr->nonce += tharg->up;
 		if (tharg->hdr->nonce == nonce)
 			break;
-		blhdr_hash(dgst, tharg->hdr);
-		zerobits = num_zerobits(dgst);
+		zerobits = zbits_blkhdr(tharg->hdr, dgst);
 	} while (zerobits < g_param->mine.zbits && *tharg->fin == 0);
 	tharg->zbits = zerobits;
 	*tharg->fin = 1;
