@@ -177,11 +177,13 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 			logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n",
 					utxo_query, mysql_stmt_error(txp->ustmt));
 		} else {
+			mysql_stmt_store_result(txp->ustmt);
 			mysql_retv = mysql_stmt_fetch(txp->ustmt);
 			while (mysql_retv != MYSQL_NO_DATA) {
 				*ackval += txp->vl_query.value;
 				mysql_retv = mysql_stmt_fetch(txp->ustmt);
 			}
+			mysql_stmt_free_result(txp->ustmt);
 		}
 		uq = (const struct utxo_query *)(((const char *)(uq + 1)) + uq->len);
 	}
@@ -331,7 +333,7 @@ void *tx_process(void *arg)
 		switch(wif->wpkt.ptype) {
 		case TX_REC:
 			if (txrec_verify(wm->sock, wif, txp) == 1)
-				write(wm->pipfd, &ping, sizeof(ping));;
+				; /*write(wm->pipfd, &ping, sizeof(ping));*/
 			break;
 		case UTXO_REQ:
 			utxo_do_query(wm->sock, wif, txp);
@@ -458,7 +460,7 @@ int main(int argc, char *argv[])
 		retv = 2;
 		goto exit_10;
 	}
-	wm->pipfd = pipfd[1];
+	/*wm->pipfd = pipfd[1];
 	switch(fork()) {
 	case 0:
 		close(pipfd[1]);
@@ -473,7 +475,7 @@ int main(int argc, char *argv[])
 		goto exit_20;
 	default:
 		break;
-	}
+	}*/
 
 	sysret = pthread_create(&rcvthd, NULL, tx_process, wm);
 	if (sysret) {

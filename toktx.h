@@ -7,9 +7,10 @@
 
 struct txrec_vout {
 	unsigned long value;
-	unsigned char *khash;
+	unsigned long blockid;
+	unsigned char owner[RIPEMD_LEN];
 	unsigned short eid;
-	unsigned short vout_idx;
+	unsigned char vout_idx;
 };
 
 struct tx_etoken_in {
@@ -54,6 +55,6 @@ int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
 int tx_verify(const struct txrec *tx);
 
 int tx_get_vout(const struct txrec *tx, struct txrec_vout *vout,
-		unsigned int *idx);
+		unsigned long blkid);
 
 #endif /* TOKTX_DSCAO__ */

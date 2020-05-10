@@ -114,11 +114,11 @@ struct txrec *tx_create(int tkid, unsigned long value, int days,
 		goto err_exit_20;
 	vout->lock[0] = OP_DUP;
 	vout->lock[1] = OP_RIPEMD160;
-	vout->lock[2] = 20;
+	vout->lock[2] = RIPEMD_LEN;
 	vout->lock[23] = OP_EQUALVERIFY;
 	vout->lock[24] = OP_CHECKSIG;
-	retv = str2bin_b64(vout->lock+3, 20, payto);
-	if (retv != 20) {
+	retv = str2bin_b64(vout->lock+3, RIPEMD_LEN, payto);
+	if (retv != RIPEMD_LEN) {
 		logmsg(LOG_ERR, "Invalid public key hash.\n");
 		goto err_exit_30;
 	}
@@ -366,7 +366,7 @@ static unsigned char *tx_sales_query(const char *khash, int eid, int *lock_len)
 	res = query + qsize;
 	pkhash = res + qsize;
 	strcpy(query, "select lockscript from sales " \
-	       	"where keyhash = ? "  "and etoken_id = ?");
+	       	"where keyhash = ? and etoken_id = ?");
 
 	mcon = mysql_init(NULL);
 	if (!check_pointer(mcon))
@@ -527,19 +527,43 @@ exit_20:
 	return suc;
 }
 
-int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
-		unsigned int *idx)
+static void tx_get_vout_owner(unsigned char *owner, const unsigned char *lock,
+		int lock_len)
 {
-	const struct tx_etoken_out *vouts, *vout;
+	const unsigned char *opcode;
+       	unsigned char opc;
 
-	if (*idx >= tx->vout_num)
+	opcode = lock;
+	while (opcode - lock < lock_len) {
+		opc = *opcode++;
+		if (opc != OP_DUP)
+			continue;
+		opc = *opcode++;
+		if (opc != OP_RIPEMD160)
+			continue;
+		break;
+	}
+	if (opcode - lock < lock_len)
+		memcpy(owner, opcode, RIPEMD_LEN);
+	else
+		memset(owner, 0, RIPEMD_LEN);
+}
+
+int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
+		unsigned long blkid)
+{
+	const struct tx_etoken_out *vout;
+
+	if (vo->vout_idx >= tx->vout_num)
 		return 0;
-	vouts = *tx->vouts;
-	vo->vout_idx = *idx;
-	vout = vouts + *idx;
+	vout = *(tx->vouts + vo->vout_idx);
 	vo->eid = vout->etk.token_id;
 	vo->value = vout->etk.value;
-	*idx += 1;
+	vo->blockid = blkid;
+	if (vout->lock_len == 0)
+		memset(vo->owner, 0, RIPEMD_LEN);
+	else
+		tx_get_vout_owner(vo->owner, vout->lock, vout->lock_len);
 
-	return *idx;
+	return 1;
 }

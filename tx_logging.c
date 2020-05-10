@@ -17,7 +17,6 @@ static void msig_handler(int sig)
 }
 
 struct txrec_sql {
-	MYSQL *mcon;
 	MYSQL_STMT *query, *update, *del;
 	const char *query_sql, *update_sql, *del_sql;
 	struct txrec_area *txbuf;
@@ -26,13 +25,12 @@ struct txrec_sql {
 };
 static struct txrec_sql txdb = {
 	.query_sql = "SELECT txhash, txdata, seq FROM txrec_pool" \
-		      " WHERE in_process = 0",
+		      " WHERE in_process = 0 FOR UPDATE",
 	.update_sql = "UPDATE txrec_pool SET in_process = 1 where seq = ?",
 	.del_sql = "DELETE FROM txrec_pool where in_process = 1"
 };
 
 struct block_sql {
-	MYSQL *mcon;
 	MYSQL_STMT *lastid, *last, *insert;
 	const char *lastid_sql, *last_sql, *insert_sql;
 	struct etk_block *block;
@@ -46,16 +44,24 @@ static struct block_sql blkdb = {
 };
 
 struct utxo_sql {
-	MYSQL_STMT *update;
-	const char *update_sql;
+	MYSQL_STMT *insert;
+	const char *insert_sql;
+	unsigned char txhash[SHA_DGST_LEN];
+	struct txrec_vout vout;
+	unsigned long owner_len, hash_len;
+};
+static struct utxo_sql utxodb = {
+	.insert_sql = "INSERT INTO utxo (keyhash, etoken_id, value, " \
+		       "vout_idx, blockid, txid) VALUES (?, ?, ?, " \
+		       "?, ?, ?)"
 };
 
 struct dbcon {
+	MYSQL *mcon;
 	struct txrec_sql *txdb;
 	struct block_sql *blkdb;
 	struct utxo_sql *utxodb;
 	MYSQL_BIND pmbind[6], resbind[3];
-	struct txrec_vout vo;
 	unsigned int maplen;
 	char connected;
 };
@@ -63,24 +69,75 @@ struct dbcon {
 static void dbcon_disconnect(struct dbcon *db);
 static void dbcon_disconnect_txdb(struct txrec_sql *txdb);
 static void dbcon_disconnect_blkdb(struct block_sql *blkdb);
+static void dbcon_disconnect_utxodb(struct utxo_sql *utxodb);
+
+static int dbcon_connect_utxodb(struct dbcon *db)
+{
+	struct utxo_sql *utxodb = db->utxodb;
+	int retv = 0;
+
+	utxodb->insert = mysql_stmt_init(db->mcon);
+	if (!check_pointer(utxodb->insert)) {
+		retv = -ENOMEM;
+		goto err_exit_10;
+	}
+	if (mysql_stmt_prepare(utxodb->insert, utxodb->insert_sql,
+				strlen(utxodb->insert_sql))) {
+		logmsg(LOG_ERR, "Prepare Statement failed, %s: %s\n",
+				utxodb->insert_sql,
+				mysql_stmt_error(utxodb->insert));
+		retv = -1;
+		goto err_exit_10;
+	}
+	memset(db->pmbind, 0, sizeof(MYSQL_BIND)*6);
+	db->pmbind[0].buffer_type = MYSQL_TYPE_BLOB;
+	db->pmbind[0].buffer = utxodb->vout.owner;
+	db->pmbind[0].buffer_length = RIPEMD_LEN;
+	db->pmbind[0].length = &utxodb->owner_len;
+	db->pmbind[1].buffer_type = MYSQL_TYPE_SHORT;
+	db->pmbind[1].buffer = &utxodb->vout.eid;
+	db->pmbind[1].is_unsigned = 1;
+	db->pmbind[2].buffer_type = MYSQL_TYPE_LONGLONG;
+	db->pmbind[2].buffer = &utxodb->vout.value;
+	db->pmbind[2].is_unsigned = 1;
+	db->pmbind[3].buffer_type = MYSQL_TYPE_TINY;
+	db->pmbind[3].buffer = &utxodb->vout.vout_idx;
+	db->pmbind[3].is_unsigned = 1;
+	db->pmbind[4].buffer_type = MYSQL_TYPE_LONGLONG;
+	db->pmbind[4].buffer = &utxodb->vout.blockid;
+	db->pmbind[4].is_unsigned = 1;
+	db->pmbind[5].buffer_type = MYSQL_TYPE_BLOB;
+	db->pmbind[5].buffer = &utxodb->txhash;
+	db->pmbind[5].buffer_length = SHA_DGST_LEN;
+	db->pmbind[5].length = &utxodb->hash_len;
+	if (mysql_stmt_bind_param(utxodb->insert, db->pmbind)) {
+		logmsg(LOG_ERR, "Param Bind failed: %s, %s\n",
+				utxodb->insert_sql,
+				mysql_stmt_error(utxodb->insert));
+		retv = -4;
+		goto err_exit_10;
+	}
+	return retv;
+
+err_exit_10:
+	dbcon_disconnect_utxodb(utxodb);
+	return retv;
+}
+
+static void dbcon_disconnect_utxodb(struct utxo_sql *utxodb)
+{
+	if (utxodb->insert) {
+		mysql_stmt_close(utxodb->insert);
+		utxodb->insert = NULL;
+	}
+}
 
 static int dbcon_connect_txdb(struct dbcon *db)
 {
 	int retv = 0;
 	struct txrec_sql *txdb = db->txdb;
 
-	txdb->mcon = mysql_init(NULL);
-	if (!check_pointer(txdb->mcon))
-		return -ENOMEM;
-	if (mysql_real_connect(txdb->mcon, g_param->db.host,
-				g_param->db.user, g_param->db.passwd,
-				g_param->db.dbname, 0, NULL, 0) == NULL) {
-		logmsg(LOG_ERR, "mysql_real_connect failed: %s\n",
-				mysql_error(txdb->mcon));
-		retv = -2;
-		goto err_exit_10;
-	}
-	txdb->query = mysql_stmt_init(txdb->mcon);
+	txdb->query = mysql_stmt_init(db->mcon);
 	if (!check_pointer(txdb->query)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
@@ -113,7 +170,7 @@ static int dbcon_connect_txdb(struct dbcon *db)
 		goto err_exit_10;
 	}
 
-	txdb->update = mysql_stmt_init(txdb->mcon);
+	txdb->update = mysql_stmt_init(db->mcon);
 	if (!check_pointer(txdb->update)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
@@ -138,7 +195,7 @@ static int dbcon_connect_txdb(struct dbcon *db)
 		goto err_exit_10;
 	}
 
-	txdb->del = mysql_stmt_init(txdb->mcon);
+	txdb->del = mysql_stmt_init(db->mcon);
 	if (!check_pointer(txdb->del)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
@@ -164,18 +221,7 @@ static int dbcon_connect_blkdb(struct dbcon *db)
 	struct block_sql *blkdb = db->blkdb;
 	int retv = 0;
 
-	blkdb->mcon = mysql_init(NULL);
-	if (!check_pointer(blkdb->mcon))
-		return -ENOMEM;
-	if (mysql_real_connect(blkdb->mcon, g_param->db.host, g_param->db.user,
-				g_param->db.passwd, g_param->db.dbname,
-				0, NULL, 0) == NULL) {
-		logmsg(LOG_ERR, "mysql_real_connect failed: %s\n",
-				mysql_error(blkdb->mcon));
-		retv = -2;
-		goto err_exit_10;
-	}
-	blkdb->lastid = mysql_stmt_init(blkdb->mcon);
+	blkdb->lastid = mysql_stmt_init(db->mcon);
 	if (!check_pointer(blkdb->lastid)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
@@ -199,7 +245,7 @@ static int dbcon_connect_blkdb(struct dbcon *db)
 		goto err_exit_10;
 	}
 
-	blkdb->last = mysql_stmt_init(blkdb->mcon);
+	blkdb->last = mysql_stmt_init(db->mcon);
 	if (!check_pointer(blkdb->last)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
@@ -233,7 +279,7 @@ static int dbcon_connect_blkdb(struct dbcon *db)
 		goto err_exit_10;
 	}
 
-	blkdb->insert = mysql_stmt_init(blkdb->mcon);
+	blkdb->insert = mysql_stmt_init(db->mcon);
 	if (!check_pointer(blkdb->insert)) {
 		retv = -ENOMEM;
 		goto err_exit_10;
@@ -274,10 +320,24 @@ static int dbcon_connect(struct dbcon *db)
 {
 	int retv = 0;
 
+	db->mcon = mysql_init(NULL);
+	if (!check_pointer(db->mcon))
+		return -ENOMEM;
+	if (mysql_real_connect(db->mcon, g_param->db.host, g_param->db.user,
+				g_param->db.passwd, g_param->db.dbname,
+				0, NULL, 0) == NULL) {
+		logmsg(LOG_ERR, "mysql_real_connect failed: %s\n",
+				mysql_error(db->mcon));
+		retv = -2;
+		goto err_exit_10;
+	}
 	retv = dbcon_connect_txdb(db);
 	if (retv)
 		goto err_exit_10;
 	retv = dbcon_connect_blkdb(db);
+	if (retv)
+		goto err_exit_10;
+	retv = dbcon_connect_utxodb(db);
 	if (retv)
 		goto err_exit_10;
 
@@ -303,10 +363,6 @@ static void dbcon_disconnect_txdb(struct txrec_sql *txdb)
 		mysql_stmt_close(txdb->del);
 		txdb->del = NULL;
 	}
-	if (txdb->mcon) {
-		mysql_close(txdb->mcon);
-		txdb->mcon = NULL;
-	}
 }
 
 static void dbcon_disconnect_blkdb(struct block_sql *blkdb)
@@ -323,17 +379,15 @@ static void dbcon_disconnect_blkdb(struct block_sql *blkdb)
 		mysql_stmt_close(blkdb->insert);
 		blkdb->insert = NULL;
 	}
-	if (blkdb->mcon) {
-		mysql_close(blkdb->mcon);
-		blkdb->mcon = NULL;
-	}
 }
 
 static void dbcon_disconnect(struct dbcon *db)
 {
 
-	dbcon_disconnect_blkdb(db->blkdb);
 	dbcon_disconnect_txdb(db->txdb);
+	dbcon_disconnect_blkdb(db->blkdb);
+	dbcon_disconnect_utxodb(db->utxodb);
+	mysql_close(db->mcon);
 	db->connected = 0;
 }
 
@@ -363,6 +417,7 @@ static struct dbcon *dbcon_init(void)
 	dbinfo->maplen = maplen;
 	dbinfo->txdb = &txdb;
 	dbinfo->blkdb = &blkdb;
+	dbinfo->utxodb = &utxodb;
 
 	dbinfo->txdb->txbuf = madr + sizeof(struct dbcon);
 	dbinfo->blkdb->block = madr + sizeof(struct dbcon) +
@@ -439,9 +494,11 @@ static int txrec_pack(struct dbcon *db)
 {
 	int mysql_retv, i, len;
 	struct txrec_sql *txdb = db->txdb;
+	struct utxo_sql *utxodb = db->utxodb;
 	struct txrec_area *txbuf;
 	struct bl_header *blkhdr;
 	unsigned char *dgst_buf, *dgst;
+	struct txrec *tx;
 
 	blkhdr = &db->blkdb->block->hdr;
 	if (blk_get_last(db) != 0)
@@ -449,9 +506,9 @@ static int txrec_pack(struct dbcon *db)
 	bl_header_init(blkhdr, db->blkdb->blk_hash);
 	printf("Last block ID: %lu\n", db->blkdb->blkid);
 
-	if (mysql_query(txdb->mcon, "START TRANSACTION")) {
+	if (mysql_query(db->mcon, "START TRANSACTION")) {
 		logmsg(LOG_ERR, "Cannot start a transaction: %s\n",
-				mysql_error(txdb->mcon));
+				mysql_error(db->mcon));
 		return 0;
 	}
 	if (mysql_stmt_execute(txdb->query)) {
@@ -467,11 +524,30 @@ static int txrec_pack(struct dbcon *db)
 		goto err_exit_10;
 	}
 
+	utxodb->owner_len = RIPEMD_LEN;
+	utxodb->hash_len = SHA_DGST_LEN;
 	txbuf = db->blkdb->block->tx_area;
 	len = ((void *)txbuf - (void *)db->blkdb->block);
 	mysql_retv = mysql_stmt_fetch(txdb->query);
 	while (mysql_retv != MYSQL_NO_DATA && len + sizeof(struct txrec_area) +
-			txdb->txbuf->txlen <= g_param->mine.max_blksize)  {
+			txdb->txbuf->txlen <= g_param->mine.max_blksize) {
+		tx = tx_deserialize((const char *)txdb->txbuf->txbuf,
+				txdb->txbuf->txlen);
+		if (!tx) {
+			mysql_retv = mysql_stmt_fetch(txdb->query);
+			continue;
+		}
+		memcpy(utxodb->txhash, txdb->txbuf->txhash, SHA_DGST_LEN);
+		utxodb->vout.vout_idx = 0;
+		while (tx_get_vout(tx, &utxodb->vout, 1) == 1) {
+			if (mysql_stmt_execute(utxodb->insert))
+				logmsg(LOG_ERR, "Cannot insert UTXO %s: %s\n",
+						utxodb->insert_sql,
+						mysql_stmt_error(utxodb->insert));
+			utxodb->vout.vout_idx++;
+		}
+		tx_destroy(tx);
+
 		txrec_area_copy(txbuf, txdb->txbuf);
 		txbuf = txrec_area_next(txbuf);
 		if (mysql_stmt_execute(txdb->update)) {
@@ -485,8 +561,8 @@ static int txrec_pack(struct dbcon *db)
 		mysql_retv = mysql_stmt_fetch(txdb->query);
 	}
 	mysql_stmt_free_result(txdb->query);
-	if (mysql_commit(txdb->mcon))
-		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(txdb->mcon));
+	if (mysql_commit(db->mcon))
+		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(db->mcon));
 
 	if (blkhdr->numtxs == 0)
 		return blkhdr->numtxs;
@@ -511,8 +587,8 @@ static int txrec_pack(struct dbcon *db)
 	return blkhdr->numtxs;
 
 err_exit_10:
-	if (mysql_commit(txdb->mcon))
-		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(txdb->mcon));
+	if (mysql_commit(db->mcon))
+		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(db->mcon));
 	return 0;
 }
 
@@ -526,17 +602,6 @@ int main(int argc, char *argv[])
 	int i, elapsed;
 	unsigned char sha_dgst[SHA_DGST_LEN];
 
-	memset(&act, 0, sizeof(act));
-	act.sa_handler = msig_handler;
-	sysret = sigaction(SIGINT, &act, NULL);
-	if (sysret == -1)
-		logmsg(LOG_ERR, "Cannot install signal handler: %s\n",
-				strerror(errno));
-	sysret = sigaction(SIGINT, &act, NULL);
-	if (sysret == -1)
-		logmsg(LOG_ERR, "Cannot install signal handler: %s\n",
-				strerror(errno));
-
 	global_param_init(NULL, 0, 0);
 	dbinfo = dbcon_init();
 	if (!dbinfo) {
@@ -544,12 +609,22 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = msig_handler;
+	sysret = sigaction(SIGINT, &act, NULL);
+	if (sysret == -1)
+		logmsg(LOG_ERR, "Cannot install signal handler: %s\n",
+				strerror(errno));
+	sysret = sigaction(SIGTERM, &act, NULL);
+	if (sysret == -1)
+		logmsg(LOG_ERR, "Cannot install signal handler: %s\n",
+				strerror(errno));
+
 	intvl.tv_sec = 1;
 	intvl.tv_nsec = 0;
-	global_exit = 1;
 	do {
 		numtx = txrec_pack(dbinfo);
-		printf("Total TX records packed: %d\n", numtx);
+		logmsg(LOG_INFO, "Total TX records packed: %d\n", numtx);
 		if (numtx == 0) {
 			nanosleep(&intvl, NULL);
 			continue;
@@ -557,12 +632,12 @@ int main(int argc, char *argv[])
 		elapsed = block_mining(&dbinfo->blkdb->block->hdr, &fin);
 		zerobits = zbits_blkhdr(&dbinfo->blkdb->block->hdr, sha_dgst);
 		fin = 0;
-		printf("Mined in %d milliseconds, leading zero bits: %d\n",
+		logmsg(LOG_INFO, "Mined in %d milliseconds, leading zero bits: %d\n",
 				elapsed, zerobits);
-		printf("SHA256: ");
+		logmsg(LOG_INFO, "SHA256: ");
 		for (i = 0; i < SHA_DGST_LEN; i++)
-			printf("%02X ", sha_dgst[i]);
-		printf("\n");
+			logmsg(LOG_INFO, "%02X ", sha_dgst[i]);
+		logmsg(LOG_INFO, "\n");
 	} while (global_exit == 0);
 
 	dbcon_exit(dbinfo);
