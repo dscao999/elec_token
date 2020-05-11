@@ -27,7 +27,7 @@ static struct txrec_sql txdb = {
 	.query_sql = "SELECT txhash, txdata, seq FROM txrec_pool" \
 		      " WHERE in_process = 0 FOR UPDATE",
 	.update_sql = "UPDATE txrec_pool SET in_process = 1 where seq = ?",
-	.del_sql = "DELETE FROM txrec_pool where in_process = 1"
+	.del_sql = "DELETE FROM txrec_pool WHERE in_process = 1"
 };
 
 struct block_sql {
@@ -44,8 +44,8 @@ static struct block_sql blkdb = {
 };
 
 struct utxo_sql {
-	MYSQL_STMT *insert;
-	const char *insert_sql;
+	MYSQL_STMT *insert, *update;
+	const char *insert_sql, *update_sql;
 	unsigned char txhash[SHA_DGST_LEN];
 	struct txrec_vout vout;
 	unsigned long owner_len, hash_len;
@@ -53,7 +53,8 @@ struct utxo_sql {
 static struct utxo_sql utxodb = {
 	.insert_sql = "INSERT INTO utxo (keyhash, etoken_id, value, " \
 		       "vout_idx, blockid, txid) VALUES (?, ?, ?, " \
-		       "?, ?, ?)"
+		       "?, ?, ?)",
+	.update_sql = "UPDATE utxo SET blockid = ? WHERE blockid = 1"
 };
 
 struct dbcon {
@@ -117,6 +118,32 @@ static int dbcon_connect_utxodb(struct dbcon *db)
 		retv = -4;
 		goto err_exit_10;
 	}
+
+	utxodb->update = mysql_stmt_init(db->mcon);
+	if (!check_pointer(utxodb->update)) {
+		retv = -ENOMEM;
+		goto err_exit_10;
+	}
+	if (mysql_stmt_prepare(utxodb->update, utxodb->update_sql,
+				strlen(utxodb->update_sql))) {
+		logmsg(LOG_ERR, "Prepare Statement failed, %s: %s\n",
+				utxodb->update_sql,
+				mysql_stmt_error(utxodb->update));
+		retv = -1;
+		goto err_exit_10;
+	}
+	memset(db->pmbind, 0, sizeof(MYSQL_BIND));
+	db->pmbind[0].buffer_type = MYSQL_TYPE_LONGLONG;
+	db->pmbind[0].buffer = &db->blkdb->blkid;
+	db->pmbind[0].is_unsigned = 1;
+	if (mysql_stmt_bind_param(utxodb->update, db->pmbind)) {
+		logmsg(LOG_ERR, "Param Bind failed: %s, %s\n",
+				utxodb->update_sql,
+				mysql_stmt_error(utxodb->update));
+		retv = -4;
+		goto err_exit_10;
+	}
+
 	return retv;
 
 err_exit_10:
@@ -129,6 +156,10 @@ static void dbcon_disconnect_utxodb(struct utxo_sql *utxodb)
 	if (utxodb->insert) {
 		mysql_stmt_close(utxodb->insert);
 		utxodb->insert = NULL;
+	}
+	if (utxodb->update) {
+		mysql_stmt_close(utxodb->update);
+		utxodb->update = NULL;
 	}
 }
 
@@ -501,10 +532,7 @@ static int txrec_pack(struct dbcon *db)
 	struct txrec *tx;
 
 	blkhdr = &db->blkdb->block->hdr;
-	if (blk_get_last(db) != 0)
-		return 0;
 	bl_header_init(blkhdr, db->blkdb->blk_hash);
-	printf("Last block ID: %lu\n", db->blkdb->blkid);
 
 	if (mysql_query(db->mcon, "START TRANSACTION")) {
 		logmsg(LOG_ERR, "Cannot start a transaction: %s\n",
@@ -592,15 +620,42 @@ err_exit_10:
 	return 0;
 }
 
+static int block_log(struct dbcon *db)
+{
+	int retv = -1;
+	struct block_sql *blkdb = db->blkdb;
+
+	if (mysql_stmt_execute(blkdb->insert)) {
+		logmsg(LOG_ERR, "Cannot execute %s: %s\n", blkdb->insert_sql,
+				mysql_stmt_error(blkdb->insert));
+		goto exit_10;
+	}
+	blkdb->blkid++;
+	if (mysql_stmt_execute(db->utxodb->update)) {
+		logmsg(LOG_ERR, "Cannot execute %s: %s\n",
+				db->utxodb->update_sql,
+				mysql_stmt_error(db->utxodb->update));
+		goto exit_10;
+	}
+	if (mysql_stmt_execute(db->txdb->del)) {
+		logmsg(LOG_ERR, "Cannot execute %s: %s\n", db->txdb->del_sql,
+				mysql_stmt_error(db->txdb->del));
+		goto exit_10;
+	}
+	retv = 0;
+
+exit_10:
+	return retv;
+}
+
 int main(int argc, char *argv[])
 {
 	struct dbcon *dbinfo;
 	int retv = 0, numtx, sysret, zerobits;
 	struct sigaction act;
 	struct timespec intvl;
-	volatile int fin = 0;
+	volatile int fin;
 	int i, elapsed;
-	unsigned char sha_dgst[SHA_DGST_LEN];
 
 	global_param_init(NULL, 0, 0);
 	dbinfo = dbcon_init();
@@ -622,22 +677,31 @@ int main(int argc, char *argv[])
 
 	intvl.tv_sec = 1;
 	intvl.tv_nsec = 0;
+	if (blk_get_last(dbinfo) != 0)
+		return 0;
 	do {
+		printf("Last block ID: %lu\n", dbinfo->blkdb->blkid);
 		numtx = txrec_pack(dbinfo);
-		logmsg(LOG_INFO, "Total TX records packed: %d\n", numtx);
 		if (numtx == 0) {
 			nanosleep(&intvl, NULL);
 			continue;
 		}
-		elapsed = block_mining(&dbinfo->blkdb->block->hdr, &fin);
-		zerobits = zbits_blkhdr(&dbinfo->blkdb->block->hdr, sha_dgst);
+		logmsg(LOG_INFO, "Total TX records packed: %d\n", numtx);
 		fin = 0;
+		elapsed = block_mining(&dbinfo->blkdb->block->hdr, &fin);
+		zerobits = zbits_blkhdr(&dbinfo->blkdb->block->hdr,
+				dbinfo->blkdb->blk_hash);
 		logmsg(LOG_INFO, "Mined in %d milliseconds, leading zero bits: %d\n",
 				elapsed, zerobits);
 		logmsg(LOG_INFO, "SHA256: ");
 		for (i = 0; i < SHA_DGST_LEN; i++)
-			logmsg(LOG_INFO, "%02X ", sha_dgst[i]);
+			logmsg(LOG_INFO, "%02X ", dbinfo->blkdb->blk_hash[i]);
 		logmsg(LOG_INFO, "\n");
+		if (block_log(dbinfo) != 0) {
+			logmsg(LOG_ERR, "Fatal Error, Cannot log block into " \
+					"the chain\n");
+			global_exit = 1;
+		}
 	} while (global_exit == 0);
 
 	dbcon_exit(dbinfo);

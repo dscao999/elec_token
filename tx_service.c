@@ -201,7 +201,7 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 void *tx_process(void *arg)
 {
 	struct wcomm *wm = arg;
-	int rc, ping = 0;
+	int rc;
 	struct timespec tm;
 	const struct winfo *cwif;
 	struct winfo *wif;
@@ -332,8 +332,7 @@ void *tx_process(void *arg)
 			continue;
 		switch(wif->wpkt.ptype) {
 		case TX_REC:
-			if (txrec_verify(wm->sock, wif, txp) == 1)
-				; /*write(wm->pipfd, &ping, sizeof(ping));*/
+			txrec_verify(wm->sock, wif, txp);
 			break;
 		case UTXO_REQ:
 			utxo_do_query(wm->sock, wif, txp);
@@ -431,11 +430,9 @@ int tx_recv(int port, struct wcomm *wm)
 int main(int argc, char *argv[])
 {
 	struct wcomm *wm;
-	int retv, sysret, hello = 0;
+	int retv, sysret;
 	struct sigaction sigact;
 	pthread_t rcvthd;
-	int pipfd[2];
-	char piparg[8];
 
 	global_param_init(NULL, 1, 0);
 	wm = wcomm_init();
@@ -455,53 +452,20 @@ int main(int argc, char *argv[])
 		logmsg(LOG_WARNING, "Cannot install signal handler for " \
 				"SIGINT: %s\n", strerror(errno));
 
-	if (pipe2(pipfd, O_DIRECT) == -1) {
-		logmsg(LOG_ERR, "pipe2 failed: %s\n", strerror(errno));
-		retv = 2;
-		goto exit_10;
-	}
-	/*wm->pipfd = pipfd[1];
-	switch(fork()) {
-	case 0:
-		close(pipfd[1]);
-		sprintf(piparg, "%d", pipfd[0]);
-		if (execl("./tx_logging", "tx_logging", piparg, NULL) == -1)
-			logmsg(LOG_ERR, "execl %s failed: %s\n",
-					strerror(errno));
-		exit(1);
-	case -1:
-		logmsg(LOG_ERR, "fork failed: %s\n", strerror(errno));
-		retv = 3;
-		goto exit_20;
-	default:
-		break;
-	}*/
-
 	sysret = pthread_create(&rcvthd, NULL, tx_process, wm);
 	if (sysret) {
 		logmsg(LOG_ERR, "pthread create failed: %s\n",
 				strerror(errno));
 		retv = 3;
-		goto exit_20;
-	}
-	sysret = write(wm->pipfd, &hello, sizeof(hello));
-	if (sysret == -1) {
-		logmsg(LOG_ERR, "Cannot write to pipe: %s\n",
-				strerror(errno));
-		global_exit = 1;
-		goto exit_30;
+		goto exit_10;
 	}
 
 	retv = tx_recv(g_param->netp.port, wm);
 	if (retv < 0)
 		retv = -retv;
 
-exit_30:
 	pthread_join(rcvthd, NULL);
 
-exit_20:
-	close(pipfd[0]);
-	close(pipfd[1]);
 exit_10:
 	global_param_exit();
 	wcomm_exit(wm);
