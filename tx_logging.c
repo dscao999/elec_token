@@ -47,8 +47,8 @@ struct utxo_sql {
 	MYSQL_STMT *insert, *update;
 	const char *insert_sql, *update_sql;
 	unsigned char txhash[SHA_DGST_LEN];
-	struct txrec_vout vout;
 	unsigned long owner_len, hash_len;
+	struct txrec_vout vout;
 };
 static struct utxo_sql utxodb = {
 	.insert_sql = "INSERT INTO utxo (keyhash, etoken_id, value, " \
@@ -625,6 +625,11 @@ static int block_log(struct dbcon *db)
 	int retv = -1;
 	struct block_sql *blkdb = db->blkdb;
 
+	if (mysql_query(db->mcon, "START TRANSACTION")) {
+		logmsg(LOG_ERR, "Cannot start transaction: %s\n",
+				mysql_error(db->mcon));
+		return mysql_errno(db->mcon);
+	}
 	if (mysql_stmt_execute(blkdb->insert)) {
 		logmsg(LOG_ERR, "Cannot execute %s: %s\n", blkdb->insert_sql,
 				mysql_stmt_error(blkdb->insert));
@@ -645,6 +650,11 @@ static int block_log(struct dbcon *db)
 	retv = 0;
 
 exit_10:
+	if (mysql_commit(db->mcon)) {
+		logmsg(LOG_ERR, "Cannot Commit transaction: %s\n",
+				mysql_errno(db->mcon));
+		retv = mysql_errno(db->mcon);
+	}
 	return retv;
 }
 

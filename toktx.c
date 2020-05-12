@@ -476,8 +476,8 @@ static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
 int tx_verify(const struct txrec *tx)
 {
 	int retv, i, lock_len, suc, serlen;
-	const struct tx_etoken_in *txin;
-	const struct tx_etoken_out *txout;
+	const struct tx_etoken_in *txin, **txins;
+	const struct tx_etoken_out *txout, **txouts;
 	const struct etoken *petk;
 	unsigned char *lock = NULL, *buf;
 	unsigned long out_val = 0, in_val = 0;
@@ -488,9 +488,10 @@ int tx_verify(const struct txrec *tx)
 	retv = 0;
 	if (!tx->vouts || *tx->vouts == NULL)
 		return suc;
-	txout = *tx->vouts;
-	petk = &txout->etk;
-	for (i = 0; i < tx->vout_num && txout; i++, txout++) {
+	txouts = (const struct tx_etoken_out **)tx->vouts;
+	petk = &(*txouts)->etk;
+	for (i = 0; i < tx->vout_num; i++, txouts++) {
+		txout = *txouts;
 		if (!etoken_equiv(&txout->etk, petk))
 			return suc;
 		out_val += txout->etk.value;
@@ -502,7 +503,9 @@ int tx_verify(const struct txrec *tx)
 	assert(serlen <= SCRATCH_LEN);
 	vm = vmach_init();
 	in_val = 0;
-	for(txin = *tx->vins, i = 0; i < tx->vin_num && txin; i++, txin++) {
+	txins = (const struct tx_etoken_in **)tx->vins;
+	for(i = 0; i < tx->vin_num; i++, txins++) {
+		txin = *txins;
 		retv = vmach_execute(vm, txin->unlock, txin->unlock_len, NULL, 0);
 		if (retv < 0)
 			goto exit_20;
@@ -543,7 +546,7 @@ static void tx_get_vout_owner(unsigned char *owner, const unsigned char *lock,
 			continue;
 		break;
 	}
-	if (opcode - lock < lock_len)
+	if ((int)(opcode - lock) + RIPEMD_LEN <= lock_len)
 		memcpy(owner, opcode, RIPEMD_LEN);
 	else
 		memset(owner, 0, RIPEMD_LEN);
