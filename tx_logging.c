@@ -2,6 +2,8 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <my_global.h>
 #include <mysql.h>
 #include "loglog.h"
@@ -9,11 +11,14 @@
 #include "tok_block.h"
 
 static volatile int global_exit = 0;
+static volatile int tx_service_changed = 0;
 
 static void msig_handler(int sig)
 {
 	if (sig == SIGINT || sig == SIGTERM)
 		global_exit = 1;
+	else if (sig == SIGCHLD)
+		tx_service_changed = 1;
 }
 
 struct txrec_sql {
@@ -562,6 +567,7 @@ static int txrec_pack(struct dbcon *db)
 		tx = tx_deserialize((const char *)txdb->txbuf->txbuf,
 				txdb->txbuf->txlen);
 		if (!tx) {
+			logmsg(LOG_WARNING, "Invalid tx record ignored.\n");
 			mysql_retv = mysql_stmt_fetch(txdb->query);
 			continue;
 		}
@@ -658,14 +664,114 @@ exit_10:
 	return retv;
 }
 
+static int spawn_tx_service(const char *tx_service, pid_t *chldpid)
+{
+	int pipd[2];
+	int sysret, retv;
+	char argv1[8];
+	
+	sysret = pipe2(pipd, O_DIRECT|O_NONBLOCK);
+	if (sysret == -1) {
+		logmsg(LOG_ERR, "pipe2 failed: %d -> %s\n", errno,
+				strerror(errno));
+		return sysret;
+	}
+	retv = pipd[0];
+	*chldpid = fork();
+	switch(*chldpid) {
+	case -1:
+		logmsg(LOG_ERR, "fork failed: %d -> %s\n", errno,
+				strerror(errno));
+		close(pipd[0]);
+		close(pipd[1]);
+		return *chldpid;
+	case 0:
+		close(pipd[0]);
+		sprintf(argv1, "%d", pipd[1]);
+		sysret = execl(tx_service, basename(tx_service), argv1, NULL);
+		if (sysret == -1) {
+			logmsg(LOG_ERR, "execl failed %d: %s\n", errno,
+					strerror(errno));
+			return sysret;
+		}
+		exit(1);
+	default:
+		close(pipd[1]);
+		break;
+	}
+
+	return retv;
+}
+
+static const char tx_service[] = "./tx_service";
+
+static int check_tx_service(pid_t chldpid)
+{
+	int chldst, retv = 0, sysret;
+
+	if (tx_service_changed == 0)
+		return retv;
+
+	tx_service_changed = 0;
+	sysret = waitpid(chldpid, &chldst, WNOHANG|WUNTRACED|WCONTINUED);
+	if (sysret != -1) {
+		retv = sysret;
+		if (WIFSTOPPED(chldst))
+			logmsg(LOG_INFO, "tx_service stopped!\n");
+		else if (WIFCONTINUED(chldst))
+				logmsg(LOG_INFO, "tx_service continued!\n");
+		else
+			logmsg(LOG_INFO, "tx_service exited unexpectedly! ");
+	} else if (errno != ECHILD) {
+		logmsg(LOG_ERR, "wait_pid failed: %s\n", strerror(errno));
+		retv = -1;
+	}
+	return retv;
+}
+
+static int wait_for_txs(int pipd)
+{
+	int txs, pingpong, numb;
+	struct timespec intvl, tm0, tm1;
+
+	intvl.tv_sec = 1;
+	intvl.tv_nsec = 0;
+	txs = 0;
+	clock_gettime(CLOCK_MONOTONIC_RAW, &tm0);
+	do {
+		do {
+			nanosleep(&intvl, NULL);
+			numb = read(pipd, &pingpong, sizeof(pingpong));
+		} while (numb == -1 && errno == EAGAIN);
+		if (numb == -1) {
+			logmsg(LOG_ERR, "pipe read failed: %s\n",
+					strerror(errno));
+			return numb;
+		} else if (numb == 0) {
+			logmsg(LOG_ERR, "tx_service died.\n");
+			return numb;
+		}
+		while (numb > 0) {
+			txs += 1;
+			numb = read(pipd, &pingpong, sizeof(pingpong));
+		}
+		clock_gettime(CLOCK_MONOTONIC_RAW, &tm1);
+	} while (txs < 10 && time_elapsed(&tm0, &tm1)/1000 < 600);
+	if (numb > 0)
+		txs += 1;
+
+	return txs;
+}
+
 int main(int argc, char *argv[])
 {
 	struct dbcon *dbinfo;
 	int retv = 0, numtx, sysret, zerobits;
 	struct sigaction act;
-	struct timespec intvl;
 	volatile int fin;
-	int i, elapsed;
+	int i, elapsed, pipd;
+	pid_t tx_svc_pid;
+	struct timespec intvl;
 
 	global_param_init(NULL, 0, 0);
 	dbinfo = dbcon_init();
@@ -684,19 +790,49 @@ int main(int argc, char *argv[])
 	if (sysret == -1)
 		logmsg(LOG_ERR, "Cannot install signal handler: %s\n",
 				strerror(errno));
+	sysret = sigaction(SIGCHLD, &act, NULL);
+	if (sysret == -1)
+		logmsg(LOG_ERR, "Cannot install SIGCHLD handler: %d -> %s\n",
+				errno, strerror(errno));
 
-	intvl.tv_sec = 1;
-	intvl.tv_nsec = 0;
-	if (blk_get_last(dbinfo) != 0)
-		return 0;
+	if (blk_get_last(dbinfo) != 0) {
+		logmsg(LOG_ERR, "Cannot get the last block in chain.\n");
+		retv = 1;
+		goto exit_10;
+	}
+	pipd = spawn_tx_service(tx_service, &tx_svc_pid);
+	if (pipd == -1) {
+		logmsg(LOG_ERR, "tx_service cannot start up.\n");
+		retv = 10;
+		goto exit_10;
+	}
+
+	intvl.tv_sec = 0;
+	intvl.tv_nsec = 100000000;
 	do {
 		printf("Last block ID: %lu\n", dbinfo->blkdb->blkid);
+		retv = wait_for_txs(pipd);
+		if (retv == 0) {
+			while (tx_service_changed == 0)
+				nanosleep(&intvl, NULL);
+			 retv = check_tx_service(tx_svc_pid);
+			 assert(retv != 0);
+			 if (retv == -1)
+				global_exit = 1;
+			 else {
+				 close(pipd);
+				 pipd = spawn_tx_service(tx_service, &tx_svc_pid);
+				 if (pipd == -1)
+					 global_exit = 1;
+			 }
+		} else if (retv == -1)
+			global_exit = 1;
 		numtx = txrec_pack(dbinfo);
+		logmsg(LOG_INFO, "Total TX records packed: %d\n", numtx);
 		if (numtx == 0) {
-			nanosleep(&intvl, NULL);
+			logmsg(LOG_WARNING, "zero tx records packed!\n");
 			continue;
 		}
-		logmsg(LOG_INFO, "Total TX records packed: %d\n", numtx);
 		fin = 0;
 		elapsed = block_mining(&dbinfo->blkdb->block->hdr, &fin);
 		zerobits = zbits_blkhdr(&dbinfo->blkdb->block->hdr,
@@ -714,6 +850,7 @@ int main(int argc, char *argv[])
 		}
 	} while (global_exit == 0);
 
+exit_10:
 	dbcon_exit(dbinfo);
 	global_param_exit();
 	return retv;

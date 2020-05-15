@@ -198,10 +198,21 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 	return 0;
 }
 
+static inline int notify_tx_logging(int pipd)
+{
+	int numb, pingpong = 1;
+
+
+	numb = write(pipd, &pingpong, sizeof(pingpong));
+	if (numb == -1)
+		logmsg(LOG_ERR, "Cannot write to pipe: %d -> %s\n", errno, strerror(errno));
+	return numb;
+}
+
 void *tx_process(void *arg)
 {
 	struct wcomm *wm = arg;
-	int rc;
+	int rc, verified;
 	struct timespec tm;
 	const struct winfo *cwif;
 	struct winfo *wif;
@@ -312,8 +323,10 @@ void *tx_process(void *arg)
 		tm.tv_sec += 1;
 		rc = 0;
 		while (global_exit == 0 && wcomm_empty(wm) &&
-				(rc == 0 || rc == ETIMEDOUT))
+				(rc == 0 || rc == ETIMEDOUT)) {
 			rc = pthread_cond_timedwait(&wm->wcd, &wm->wmtx, &tm);
+			tm.tv_sec += 1;
+		}
 		if (unlikely(rc != 0 && rc != ETIMEDOUT)) {
 			logmsg(LOG_ERR, "pthread_cond_timedwait failed: %s\n",
 					strerror(rc));
@@ -332,7 +345,11 @@ void *tx_process(void *arg)
 			continue;
 		switch(wif->wpkt.ptype) {
 		case TX_REC:
-			txrec_verify(wm->sock, wif, txp);
+			verified = txrec_verify(wm->sock, wif, txp);
+			if (verified == 1 && wm->pipd != -1) {
+				if (notify_tx_logging(wm->pipd) == -1)
+					global_exit = 1;
+			}
 			break;
 		case UTXO_REQ:
 			utxo_do_query(wm->sock, wif, txp);
@@ -440,6 +457,10 @@ int main(int argc, char *argv[])
 		global_param_exit();
 		return 1;
 	}
+	if (argc > 1)
+		wm->pipd = atoi(argv[1]);
+	else
+		wm->pipd = -1;
 
 	memset(&sigact, 0, sizeof(sigact));
 	sigact.sa_handler = mysig_handler;

@@ -28,7 +28,7 @@ struct wcomm {
 	pthread_cond_t wcd;
 	pthread_mutex_t wmtx;
 	int sock;
-	int pipfd;
+	int pipd;
 	volatile short tail;
 	short head;
 };
