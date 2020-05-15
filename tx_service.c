@@ -482,8 +482,10 @@ int main(int argc, char *argv[])
 	}
 
 	retv = tx_recv(g_param->netp.port, wm);
-	if (retv < 0)
+	if (retv < 0) {
 		retv = -retv;
+		global_exit = 1;
+	}
 
 	pthread_join(rcvthd, NULL);
 

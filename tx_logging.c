@@ -721,7 +721,7 @@ static int check_tx_service(pid_t chldpid)
 		else if (WIFCONTINUED(chldst))
 				logmsg(LOG_INFO, "tx_service continued!\n");
 		else
-			logmsg(LOG_INFO, "tx_service exited unexpectedly! ");
+			logmsg(LOG_INFO, "tx_service exited unexpectedly!\n");
 	} else if (errno != ECHILD) {
 		logmsg(LOG_ERR, "wait_pid failed: %s\n", strerror(errno));
 		retv = -1;
@@ -729,9 +729,11 @@ static int check_tx_service(pid_t chldpid)
 	return retv;
 }
 
+static const int max_secs = 60;
+
 static int wait_for_txs(int pipd)
 {
-	int txs, pingpong, numb;
+	int txs, pingpong, numb, secs;
 	struct timespec intvl, tm0, tm1;
 
 	intvl.tv_sec = 1;
@@ -739,14 +741,20 @@ static int wait_for_txs(int pipd)
 	txs = 0;
 	clock_gettime(CLOCK_MONOTONIC_RAW, &tm0);
 	do {
+		secs = 0;
 		do {
+			secs += 1;
+			if (txs != 0 && secs == max_secs)
+				break;
 			nanosleep(&intvl, NULL);
 			numb = read(pipd, &pingpong, sizeof(pingpong));
-		} while (numb == -1 && errno == EAGAIN);
+		} while (numb == -1 && errno == EAGAIN && global_exit == 0);
 		if (numb == -1) {
-			logmsg(LOG_ERR, "pipe read failed: %s\n",
-					strerror(errno));
-			return numb;
+			if (errno != EAGAIN)
+				logmsg(LOG_ERR, "pipe read failed: %d -> %s\n",
+						errno, strerror(errno));
+			if (secs != max_secs)
+				return numb;
 		} else if (numb == 0) {
 			logmsg(LOG_ERR, "tx_service died.\n");
 			return numb;
@@ -756,7 +764,7 @@ static int wait_for_txs(int pipd)
 			numb = read(pipd, &pingpong, sizeof(pingpong));
 		}
 		clock_gettime(CLOCK_MONOTONIC_RAW, &tm1);
-	} while (txs < 10 && time_elapsed(&tm0, &tm1)/1000 < 600);
+	} while (txs < 10 && time_elapsed(&tm0, &tm1)/1000 < max_secs);
 	if (numb > 0)
 		txs += 1;
 
@@ -819,14 +827,16 @@ int main(int argc, char *argv[])
 			 assert(retv != 0);
 			 if (retv == -1)
 				global_exit = 1;
-			 else {
+			 else if (global_exit == 0) {
 				 close(pipd);
 				 pipd = spawn_tx_service(tx_service, &tx_svc_pid);
 				 if (pipd == -1)
 					 global_exit = 1;
 			 }
-		} else if (retv == -1)
+		} else if (retv == -1) {
 			global_exit = 1;
+			logmsg(LOG_ERR, "wait_for_tx failed.\n");
+		}
 		numtx = txrec_pack(dbinfo);
 		logmsg(LOG_INFO, "Total TX records packed: %d\n", numtx);
 		if (numtx == 0) {
@@ -849,6 +859,9 @@ int main(int argc, char *argv[])
 			global_exit = 1;
 		}
 	} while (global_exit == 0);
+	close(pipd);
+	if (kill(tx_svc_pid, SIGTERM) == 0)
+		waitpid(tx_svc_pid, &sysret, 0);
 
 exit_10:
 	dbcon_exit(dbinfo);

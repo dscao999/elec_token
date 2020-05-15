@@ -2,6 +2,7 @@
 CFLAGS += -I../include -I/usr/include/mariadb -fPIC -pthread
 CFLAGS += -D_GNU_SOURCE
 LDFLAGS += -pthread -g
+DBLIB = -lmariadbclient
 
 VPATH = ../ecc256
 
@@ -15,15 +16,15 @@ genblk: genblock.o tok_block.o global_param.o $(eccobj)
 	$(LINK.o) -pthread $^ -lgmp -lasound -o $@
 
 toktx: txtokens.o toktx.o tokens.o virtmach.o global_param.o $(eccobj)
-	$(LINK.o) $^ -lmariadb -lasound -lgmp -o $@
+	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
 
 tx_service: tx_service.o toktx.o tokens.o virtmach.o global_param.o \
 	wcomm.o $(eccobj)
-	$(LINK.o) $^ -lmariadb -lasound -lgmp -o $@
+	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
 
 tx_logging: tx_logging.o tok_block.o toktx.o global_param.o virtmach.o \
 	tokens.o $(eccobj)
-	$(LINK.o) $^ -lmariadb -lasound -lgmp -o $@
+	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
 
 clean:
 	rm -f *.o
@@ -36,4 +37,4 @@ release: CFLAGS += -O2
 release: LDFLAGS += -O1
 
 ../lib/libtoktx.so: tokens.o toktx.o virtmach.o global_param.o $(eccobj)
-	$(LINK.o) -shared -Bsymblic $^ -lmariadb -lgmp -lasound -o $@
+	$(LINK.o) -shared -Bsymblic $^ $(DBLIB) -lgmp -lasound -o $@
