@@ -169,8 +169,10 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 		ackval = (unsigned long *)curmsg;
 		*ackval = 0;
 		curmsg += sizeof(unsigned long);
-		strcpy(curmsg, uq->keyhash);
-		keylen = align8(strlen(uq->keyhash) + 1);
+		keylen = align8(strlen(uq->keyhash) + 2);
+		memset(curmsg, 0, keylen);
+		*curmsg = keylen;
+		strcpy(curmsg+1, uq->keyhash);
 		curmsg += keylen;
 		len += sizeof(unsigned long) + keylen;
 		if (mysql_stmt_execute(txp->umt)) {
