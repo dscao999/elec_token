@@ -546,9 +546,10 @@ static void tx_get_vout_owner(unsigned char *owner, const unsigned char *lock,
 			continue;
 		break;
 	}
-	if ((int)(opcode - lock) + RIPEMD_LEN <= lock_len)
-		memcpy(owner, opcode, RIPEMD_LEN);
-	else
+	if ((int)(opcode - lock) + RIPEMD_LEN + 1 <= lock_len) {
+		assert(*opcode == RIPEMD_LEN);
+		memcpy(owner, opcode+1, RIPEMD_LEN);
+	} else
 		memset(owner, 0, RIPEMD_LEN);
 }
 
@@ -556,6 +557,8 @@ int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
 		unsigned long blkid)
 {
 	const struct tx_etoken_out *vout;
+	char ripe_str[32];
+	int len;
 
 	if (vo->vout_idx >= tx->vout_num)
 		return 0;
@@ -565,8 +568,12 @@ int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
 	vo->blockid = blkid;
 	if (vout->lock_len == 0)
 		memset(vo->owner, 0, RIPEMD_LEN);
-	else
+	else {
 		tx_get_vout_owner(vo->owner, vout->lock, vout->lock_len);
+		len = bin2str_b64(ripe_str, sizeof(ripe_str), vo->owner, RIPEMD_LEN);
+		ripe_str[len] = 0;
+		printf("Owner: %s\n", ripe_str);
+	}
 
 	return 1;
 }

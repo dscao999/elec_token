@@ -113,7 +113,7 @@ static int dbcon_connect_utxodb(struct dbcon *db)
 	db->pmbind[4].buffer = &utxodb->vout.blockid;
 	db->pmbind[4].is_unsigned = 1;
 	db->pmbind[5].buffer_type = MYSQL_TYPE_BLOB;
-	db->pmbind[5].buffer = &utxodb->txhash;
+	db->pmbind[5].buffer = utxodb->txhash;
 	db->pmbind[5].buffer_length = SHA_DGST_LEN;
 	db->pmbind[5].length = &utxodb->hash_len;
 	if (mysql_stmt_bind_param(utxodb->insert, db->pmbind)) {
@@ -744,39 +744,41 @@ static const int max_secs = 60;
 static int wait_for_txs(int pipd)
 {
 	int txs, pingpong, numb, secs;
-	struct timespec intvl, tm0, tm1;
+	struct timespec intvl;
 
 	intvl.tv_sec = 1;
 	intvl.tv_nsec = 0;
 	txs = 0;
-	clock_gettime(CLOCK_MONOTONIC_RAW, &tm0);
 	do {
-		secs = 0;
-		do {
-			secs += 1;
-			if (txs != 0 && secs == max_secs)
-				break;
-			nanosleep(&intvl, NULL);
-			numb = read(pipd, &pingpong, sizeof(pingpong));
-		} while (numb == -1 && errno == EAGAIN && global_exit == 0);
-		if (numb == -1) {
-			if (errno != EAGAIN)
-				logmsg(LOG_ERR, "pipe read failed: %d -> %s\n",
-						errno, strerror(errno));
-			if (secs != max_secs)
-				return numb;
-		} else if (numb == 0) {
+		numb = read(pipd, &pingpong, sizeof(pingpong));
+		if (numb == 0) {
 			logmsg(LOG_ERR, "tx_service died.\n");
 			return numb;
 		}
-		while (numb > 0) {
+		nanosleep(&intvl, NULL);
+	} while (numb == -1 && errno == EAGAIN && global_exit == 0);
+	if (numb == -1) {
+		logmsg(LOG_ERR, "Read pipe failed: %s\n", strerror(errno));
+		return numb;
+	}
+	txs += 1;
+	secs = 0;
+	do {
+		if (secs == max_secs)
+			break;
+		nanosleep(&intvl, NULL);
+		numb = read(pipd, &pingpong, sizeof(pingpong));
+		if (numb == 0) {
+			logmsg(LOG_ERR, "tx_service died.\n");
+			return numb;
+		} else if (numb > 0)
 			txs += 1;
-			numb = read(pipd, &pingpong, sizeof(pingpong));
-		}
-		clock_gettime(CLOCK_MONOTONIC_RAW, &tm1);
-	} while (txs < 10 && time_elapsed(&tm0, &tm1)/1000 < max_secs);
-	if (numb > 0)
-		txs += 1;
+		secs += 1;
+	} while (numb == -1 && errno == EAGAIN && global_exit == 0 && txs < 10);
+	if (numb == -1 && errno != EAGAIN) {
+		logmsg(LOG_ERR, "Read pipe failed: %s\n", strerror(errno));
+		return numb;
+	}
 
 	return txs;
 }
