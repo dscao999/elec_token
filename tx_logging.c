@@ -628,38 +628,48 @@ err_exit_10:
 
 static int block_log(struct dbcon *db)
 {
-	int retv = -1;
+	int retv = 0;
 	struct block_sql *blkdb = db->blkdb;
 
 	if (mysql_query(db->mcon, "START TRANSACTION")) {
 		logmsg(LOG_ERR, "Cannot start transaction: %s\n",
 				mysql_error(db->mcon));
+		retv = -mysql_errno(db->mcon);
 		return mysql_errno(db->mcon);
 	}
 	if (mysql_stmt_execute(blkdb->insert)) {
 		logmsg(LOG_ERR, "Cannot execute %s: %s\n", blkdb->insert_sql,
 				mysql_stmt_error(blkdb->insert));
-		goto exit_10;
+		retv = -mysql_stmt_errno(blkdb->insert);
+		goto err_exit_10;
 	}
 	blkdb->blkid++;
 	if (mysql_stmt_execute(db->utxodb->update)) {
 		logmsg(LOG_ERR, "Cannot execute %s: %s\n",
 				db->utxodb->update_sql,
 				mysql_stmt_error(db->utxodb->update));
-		goto exit_10;
+		retv = -mysql_stmt_errno(db->utxodb->update);
+		goto err_exit_10;
 	}
 	if (mysql_stmt_execute(db->txdb->del)) {
 		logmsg(LOG_ERR, "Cannot execute %s: %s\n", db->txdb->del_sql,
 				mysql_stmt_error(db->txdb->del));
-		goto exit_10;
+		retv = -mysql_stmt_errno(db->txdb->del);
+		goto err_exit_10;
 	}
-	retv = 0;
 
-exit_10:
 	if (mysql_commit(db->mcon)) {
 		logmsg(LOG_ERR, "Cannot Commit transaction: %s\n",
 				mysql_errno(db->mcon));
-		retv = mysql_errno(db->mcon);
+		retv = -mysql_errno(db->mcon);
+	}
+	return retv;
+
+err_exit_10:
+	if (mysql_rollback(db->mcon)) {
+		logmsg(LOG_ERR, "Cannot rollback transaction: %s\n",
+				mysql_errno(db->mcon));
+		retv = -mysql_errno(db->mcon);
 	}
 	return retv;
 }
