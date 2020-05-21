@@ -14,6 +14,14 @@
 #define TOKEN_TX_VER	0x01
 #define SCRATCH_LEN	4096
 
+void tx_trans_abort(unsigned long txptr)
+{
+	struct txrec *tx;
+
+	tx = (struct txrec *)txptr;
+	tx_destroy(tx);
+}
+
 void tx_destroy(struct txrec *tx)
 {
 	struct tx_etoken_in **txins, *txin;
@@ -576,4 +584,36 @@ int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
 	}
 
 	return 1;
+}
+
+int tx_trans_begin(char *ptr, unsigned int tokid,
+		unsigned long value, const unsigned char *payto)
+{
+	char *txptr;
+
+	printf("payto: %s, value: %lu, Token: %d\n", payto, value, tokid);
+	txptr = malloc(1024);
+	strcpy(txptr, "Just a very good test!");
+	printf("In tx_trans_begin: %p\n", txptr);
+	memcpy(ptr, &txptr, sizeof(unsigned long));
+	return 0;
+}
+
+int tx_trans_add(unsigned long txptr, unsigned char *prkey, unsigned long value)
+{
+	char *str = (char *)txptr;
+	printf("In tx_trans_add! %p\n", str);
+	fflush(stdout);
+	printf("tx_trans_add: %s\n", str);
+	return 0;
+}
+
+int tx_trans_end(char *buf, int buflen, unsigned long txptr)
+{
+	char *str = (char *)txptr;
+	printf("tx_trans_end: %s\n", str);
+	memset(buf, 0, buflen);
+	strcpy(buf, str);
+	free(str);
+	return 0;
 }
