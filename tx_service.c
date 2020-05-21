@@ -166,15 +166,13 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 	while (uq->len != 0) {
 		numb = str2bin_b64(txp->val_query.keyhash, RIPEMD_LEN, uq->keyhash);
 		assert(numb == RIPEMD_LEN);
-		ackval = (unsigned long *)curmsg;
-		*ackval = 0;
-		curmsg += sizeof(unsigned long);
 		keylen = align8(strlen(uq->keyhash) + 2);
 		memset(curmsg, 0, keylen);
 		*curmsg = keylen;
 		strcpy(curmsg+1, uq->keyhash);
 		curmsg += keylen;
-		len += sizeof(unsigned long) + keylen;
+		len += keylen;
+		ackval = (unsigned long *)curmsg;
 		if (mysql_stmt_execute(txp->umt)) {
 			logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n",
 					utxo_query, mysql_stmt_error(txp->umt));
@@ -182,11 +180,17 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 			mysql_stmt_store_result(txp->umt);
 			mysql_retv = mysql_stmt_fetch(txp->umt);
 			while (mysql_retv != MYSQL_NO_DATA) {
-				*ackval += txp->val_query.value;
+				*ackval = txp->val_query.value;
 				mysql_retv = mysql_stmt_fetch(txp->umt);
+				curmsg += sizeof(unsigned long);
+				len += sizeof(unsigned long);
+				ackval = (unsigned long *)curmsg;
 			}
 			mysql_stmt_free_result(txp->umt);
 		}
+		*ackval = 0;
+		len += sizeof(unsigned long);
+		curmsg += sizeof(unsigned long);
 		uq = (const struct utxo_query *)(((const char *)(uq + 1)) + uq->len);
 	}
 	wpkt->len = len;
