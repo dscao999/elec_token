@@ -39,7 +39,8 @@ struct hashtx_info {
 };
 
 struct hashkey_query {
-	unsigned long value, ripe_len;
+	unsigned long value, ripe_len, sha_len;
+	unsigned char txid[SHA_DGST_LEN];
 	unsigned char keyhash[RIPEMD_LEN];
 	unsigned short etoken_id;
 };
@@ -51,7 +52,7 @@ struct txrec_info {
 		struct hashtx_info txop;
 		struct hashkey_query val_query;
 	};
-	MYSQL_BIND mbnd[2], rbnd[1];
+	MYSQL_BIND mbnd[2], rbnd[2];
 	struct wpacket wpkt;
 } __attribute__((aligned(8)));
 
@@ -71,9 +72,9 @@ static const char txid_query[] = "SELECT seq FROM txrec_pool WHERE " \
 				  "txhash = ? LOCK IN SHARE MODE";
 static const char txid_insert[] = "INSERT INTO txrec_pool(txhash, txdata) " \
 				  "VALUES(?, ?)";
-static const char utxo_query[] = "SELECT value FROM utxo WHERE keyhash = ? " \
-				  "AND etoken_id = ? AND in_process = false " \
-				  "AND blockid > 1";
+static const char utxo_query[] = "SELECT value, txid FROM utxo " \
+				  "WHERE keyhash = ? AND etoken_id = ? " \
+				  "AND in_process = false AND blockid > 1";
 
 static int txrec_verify(int sock, const struct winfo *wif,
 		struct txrec_info *txp)
@@ -181,9 +182,13 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 			mysql_retv = mysql_stmt_fetch(txp->umt);
 			while (mysql_retv != MYSQL_NO_DATA) {
 				*ackval = txp->val_query.value;
-				mysql_retv = mysql_stmt_fetch(txp->umt);
 				curmsg += sizeof(unsigned long);
 				len += sizeof(unsigned long);
+				assert(txp->val_query.sha_len == SHA_DGST_LEN);
+				memcpy(curmsg, txp->val_query.txid, SHA_DGST_LEN);
+				mysql_retv = mysql_stmt_fetch(txp->umt);
+				curmsg += SHA_DGST_LEN;
+				len += SHA_DGST_LEN;
 				ackval = (unsigned long *)curmsg;
 			}
 			mysql_stmt_free_result(txp->umt);
@@ -318,10 +323,14 @@ static int txrec_info_init(struct txrec_info *txp, struct winfo *wif)
 		retv = -mysql_stmt_errno(txp->umt);
 		goto err_exit_40;
 	}
-	memset(txp->rbnd, 0, sizeof(MYSQL_BIND));
+	memset(txp->rbnd, 0, 2*sizeof(MYSQL_BIND));
 	txp->rbnd[0].buffer_type = MYSQL_TYPE_LONGLONG;
 	txp->rbnd[0].buffer = &txp->val_query.value;
 	txp->rbnd[0].is_unsigned = 1;
+	txp->rbnd[1].buffer_type = MYSQL_TYPE_BLOB;
+	txp->rbnd[1].buffer = txp->val_query.txid;
+	txp->rbnd[1].buffer_length = SHA_DGST_LEN;
+	txp->rbnd[1].length = &txp->val_query.sha_len;
 	if (mysql_stmt_bind_result(txp->umt, txp->rbnd)) {
 		logmsg(LOG_ERR, "mysql_stmt_bind_result failed: %s, %s\n",
 				txid_query, mysql_stmt_error(txp->qmt));
