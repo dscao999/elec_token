@@ -43,6 +43,7 @@ struct hashkey_query {
 	unsigned char txid[SHA_DGST_LEN];
 	unsigned char keyhash[RIPEMD_LEN];
 	unsigned short etoken_id;
+	unsigned char vout_idx;
 };
 
 struct txrec_info {
@@ -52,7 +53,7 @@ struct txrec_info {
 		struct hashtx_info txop;
 		struct hashkey_query val_query;
 	};
-	MYSQL_BIND mbnd[2], rbnd[2];
+	MYSQL_BIND mbnd[2], rbnd[3];
 	struct wpacket wpkt;
 } __attribute__((aligned(8)));
 
@@ -72,7 +73,7 @@ static const char txid_query[] = "SELECT seq FROM txrec_pool WHERE " \
 				  "txhash = ? LOCK IN SHARE MODE";
 static const char txid_insert[] = "INSERT INTO txrec_pool(txhash, txdata) " \
 				  "VALUES(?, ?)";
-static const char utxo_query[] = "SELECT value, txid FROM utxo " \
+static const char utxo_query[] = "SELECT value, txid, vout_idx FROM utxo " \
 				  "WHERE keyhash = ? AND etoken_id = ? " \
 				  "AND in_process = false AND blockid > 1";
 
@@ -141,18 +142,18 @@ exit_100:
 }
 
 struct utxo_query {
-	unsigned short len;
+	unsigned char len;
 	char keyhash[0];
 };
 
 static int utxo_do_query(int sock, const struct winfo *wif,
 		struct txrec_info *txp)
 {
-	unsigned long *ackval;
+	unsigned char *ackval;
 	const struct utxo_query *uq;
 	unsigned short *etoken_id;
 	char *curmsg;
-	int mysql_retv, len, keylen, numb;
+	int mysql_retv, len, numb;
 	struct wpacket *wpkt;
 	struct sockaddr_in *sockaddr;
 
@@ -165,15 +166,13 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 	len = 0;
 	uq = (const struct utxo_query *)(wif->wpkt.pkt + sizeof(unsigned short));
 	while (uq->len != 0) {
-		numb = str2bin_b64(txp->val_query.keyhash, RIPEMD_LEN, uq->keyhash);
-		assert(numb == RIPEMD_LEN);
-		keylen = align8(strlen(uq->keyhash) + 2);
-		memset(curmsg, 0, keylen);
-		*curmsg = keylen;
-		strcpy(curmsg+1, uq->keyhash);
-		curmsg += keylen;
-		len += keylen;
-		ackval = (unsigned long *)curmsg;
+		assert(uq->len == RIPEMD_LEN);
+		memcpy(txp->val_query.keyhash, uq->keyhash, uq->len);
+		*curmsg = uq->len;
+		memcpy(curmsg+1, uq->keyhash, uq->len);
+		curmsg += uq->len + 1;
+		len += uq->len + 1;
+		ackval = (unsigned char *)curmsg;
 		if (mysql_stmt_execute(txp->umt)) {
 			logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n",
 					utxo_query, mysql_stmt_error(txp->umt));
@@ -181,19 +180,23 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 			mysql_stmt_store_result(txp->umt);
 			mysql_retv = mysql_stmt_fetch(txp->umt);
 			while (mysql_retv != MYSQL_NO_DATA) {
-				*ackval = txp->val_query.value;
+				memcpy(ackval, &txp->val_query.value, sizeof(unsigned long));
 				curmsg += sizeof(unsigned long);
 				len += sizeof(unsigned long);
 				assert(txp->val_query.sha_len == SHA_DGST_LEN);
-				memcpy(curmsg, txp->val_query.txid, SHA_DGST_LEN);
+				*curmsg = txp->val_query.sha_len;
+				memcpy(curmsg+1, txp->val_query.txid, txp->val_query.sha_len);
+				curmsg += txp->val_query.sha_len + 1;
+				len += txp->val_query.sha_len + 1;
+				*curmsg = txp->val_query.vout_idx;
+				curmsg += 1;
+				len += 1;
 				mysql_retv = mysql_stmt_fetch(txp->umt);
-				curmsg += SHA_DGST_LEN;
-				len += SHA_DGST_LEN;
-				ackval = (unsigned long *)curmsg;
+				ackval = (unsigned char *)curmsg;
 			}
 			mysql_stmt_free_result(txp->umt);
 		}
-		*ackval = 0;
+		memset(ackval, 0, sizeof(unsigned long));
 		len += sizeof(unsigned long);
 		curmsg += sizeof(unsigned long);
 		uq = (const struct utxo_query *)(((const char *)(uq + 1)) + uq->len);
@@ -331,6 +334,9 @@ static int txrec_info_init(struct txrec_info *txp, struct winfo *wif)
 	txp->rbnd[1].buffer = txp->val_query.txid;
 	txp->rbnd[1].buffer_length = SHA_DGST_LEN;
 	txp->rbnd[1].length = &txp->val_query.sha_len;
+	txp->rbnd[2].buffer_type = MYSQL_TYPE_TINY;
+	txp->rbnd[2].buffer = &txp->val_query.vout_idx;
+	txp->rbnd[2].is_unsigned = 1;
 	if (mysql_stmt_bind_result(txp->umt, txp->rbnd)) {
 		logmsg(LOG_ERR, "mysql_stmt_bind_result failed: %s, %s\n",
 				txid_query, mysql_stmt_error(txp->qmt));
