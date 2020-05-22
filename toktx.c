@@ -586,34 +586,108 @@ int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
 	return 1;
 }
 
-int tx_trans_begin(char *ptr, unsigned int tokid,
-		unsigned long value, const unsigned char *payto)
+static void txrec_init(struct txrec *tx)
 {
-	char *txptr;
+	struct timespec tm;
 
-	printf("payto: %s, value: %lu, Token: %d\n", payto, value, tokid);
-	txptr = malloc(1024);
-	strcpy(txptr, "Just a very good test!");
-	printf("In tx_trans_begin: %p\n", txptr);
-	memcpy(ptr, &txptr, sizeof(unsigned long));
-	return 0;
+	memset(tx, 0, sizeof(struct txrec));
+	tx->ver = TOKEN_TX_VER;
+	clock_gettime(CLOCK_REALTIME, &tm);
+	tx->tm = tm.tv_sec;
 }
 
-int tx_trans_add(unsigned long txptr, unsigned char *prkey, unsigned long value)
+int tx_trans_begin(struct txrec **ptr, unsigned int tokid,
+		unsigned long value, const unsigned char *payto)
 {
-	char *str = (char *)txptr;
-	printf("In tx_trans_add! %p\n", str);
-	fflush(stdout);
-	printf("tx_trans_add: %s\n", str);
-	return 0;
+	int retv = 0;
+	struct txrec *txptr;
+	struct tx_etoken_out *vout;
+
+	txptr = malloc(sizeof(struct txrec));
+	if (!check_pointer(txptr)) {
+		*ptr = NULL;
+		return -ENOMEM;
+	}
+	txrec_init(txptr);
+	vout = malloc(sizeof(struct tx_etoken_out));
+	if (!check_pointer(vout)) {
+		retv = -ENOMEM;
+		goto err_exit_10;
+	}
+	vout->lock_len = 25;
+	vout->lock = malloc(25);
+	if (!check_pointer(vout->lock)) {
+		retv = -ENOMEM;
+		goto err_exit_20;
+	}
+	vout->lock[0] = OP_DUP;
+	vout->lock[1] = OP_RIPEMD160;
+	vout->lock[2] = RIPEMD_LEN;
+	memcpy(vout->lock+3, payto, RIPEMD_LEN);
+	vout->lock[23] = OP_EQUALVERIFY;
+	vout->lock[24] = OP_CHECKSIG;
+	etoken_init(&vout->etk, tokid, value, 0);
+
+	txptr->vout_num = 1;
+	txptr->vouts = malloc(sizeof(struct tx_etoken_out **));
+	if (!check_pointer(txptr->vouts)) {
+		retv = -ENOMEM;
+		goto err_exit_30;
+	}
+	*txptr->vouts = vout;
+	*ptr = txptr;
+	return retv;
+
+err_exit_30:
+	free(vout->lock);
+err_exit_20:
+	free(vout);
+err_exit_10:
+	free(txptr);
+	*ptr = NULL;
+	return retv;
+}
+
+int tx_trans_add(unsigned long txptr, unsigned char *txid, int vout_idx)
+{
+	int retv = 0, i;
+	struct tx_etoken_in *vin, **vins, **p_vins, **c_vins;
+	struct txrec *tx = (struct txrec *)txptr;
+
+	vin = malloc(sizeof(struct tx_etoken_in));
+	if (!check_pointer(vin))
+		return -ENOMEM;
+	memset(vin, 0, sizeof(struct tx_etoken_in));
+	vin->vout_idx = vout_idx;
+	memcpy(vin->txid, txid, SHA_DGST_LEN);
+
+	vins = malloc((tx->vin_num+1)*sizeof(struct tx_etoken_in **));
+	if (!check_pointer(vins)) {
+		retv = -ENOMEM;
+		goto err_exit_10;
+	}
+	p_vins = tx->vins;
+	c_vins = vins;
+	for( i = 0; i < tx->vin_num; i++)
+		*c_vins++ = *p_vins++;
+	*c_vins = vin;
+	if (tx->vins)
+		free(tx->vins);
+	tx->vins = vins;
+	tx->vin_num += 1;
+
+	return retv;
+
+err_exit_10:
+	free(vin);
+	return retv;
 }
 
 int tx_trans_end(char *buf, int buflen, unsigned long txptr)
 {
-	char *str = (char *)txptr;
-	printf("tx_trans_end: %s\n", str);
-	memset(buf, 0, buflen);
-	strcpy(buf, str);
-	free(str);
+	struct txrec *tx = (struct txrec *)txptr;
+
+	printf("tx_trans_end, TX in: %d\n", tx->vin_num);
+	tx_destroy(tx);
 	return 0;
 }
