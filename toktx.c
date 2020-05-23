@@ -58,11 +58,37 @@ void tx_destroy(struct txrec *tx)
 	free(tx);
 }
 
+static int tx_sign(char *buf, int buflen, const struct txrec *tx, int vin_idx,
+		const struct ecc_key *ecckey)
+{
+	int txlen, pos;
+	struct tx_etoken_in *vin;
+	struct ecc_sig eccsig;
+
+	txlen = tx_serialize(buf, buflen, tx, 0);
+	assert(txlen <= buflen);
+	ecc_sign(&eccsig, ecckey, (const unsigned char *)buf, txlen);
+	vin = *(tx->vins + vin_idx);
+	vin->unlock_len = sizeof(struct ecc_sig) + ECCKEY_INT_LEN * 4 + 4;
+	vin->unlock = malloc(vin->unlock_len);
+	if (!check_pointer(vin->unlock))
+		return -ENOMEM;
+	vin->unlock[0] = sizeof(struct ecc_sig);
+	memcpy(vin->unlock+1, &eccsig, sizeof(struct ecc_sig));
+	pos = sizeof(struct ecc_sig) + 1;
+	vin->unlock[pos] = ECCKEY_INT_LEN * 4 + 1;
+	vin->unlock[pos+1] = 2 - (ecckey->py[ECCKEY_INT_LEN-1] & 1);
+	memcpy(vin->unlock+pos+2, ecckey->px, ECCKEY_INT_LEN * 4);
+	pos += ECCKEY_INT_LEN * 4 + 2;
+	vin->unlock[pos] = OP_CALCULATE_Y;
+	assert(pos + 1 == vin->unlock_len);
+	return 0;
+}
+
 struct txrec *tx_create(int tkid, unsigned long value, int days,
 		const char *payto, const struct ecc_key *ecckey)
 {
-	struct ecc_sig *eccsig;
-	int buflen, txlen, pos, retv;
+	int buflen, retv;
 	struct timespec tm;
 	struct tx_etoken_in *vin;
 	struct tx_etoken_out *vout;
@@ -92,10 +118,8 @@ struct txrec *tx_create(int tkid, unsigned long value, int days,
 	pool = malloc(2048);
 	if (!check_pointer(pool))
 		goto err_exit_10;
-
-	eccsig = pool;
-	buf = ((void *)eccsig) + sizeof(struct ecc_sig);
-	buflen = 2048 - (buf - (char *)pool);
+	buf = pool;
+	buflen = 2048;
 
 	*tx->vins = malloc(sizeof(struct tx_etoken_in));
 	if (!check_pointer(*tx->vins))
@@ -130,23 +154,9 @@ struct txrec *tx_create(int tkid, unsigned long value, int days,
 		logmsg(LOG_ERR, "Invalid public key hash.\n");
 		goto err_exit_30;
 	}
-
-	txlen = tx_serialize(buf, buflen, tx, 0);
-	assert(txlen <= buflen);
-	ecc_sign(eccsig, ecckey, (const unsigned char *)buf, txlen);
-	vin->unlock_len = sizeof(struct ecc_sig) + ECCKEY_INT_LEN * 4 + 4;
-	vin->unlock = malloc(vin->unlock_len);
-	if (!check_pointer(vin->unlock))
+	retv = tx_sign(buf, buflen, tx, 0, ecckey);
+	if (retv != 0)
 		goto err_exit_30;
-	vin->unlock[0] = sizeof(struct ecc_sig);
-	memcpy(vin->unlock+1, eccsig, sizeof(struct ecc_sig));
-	pos = sizeof(struct ecc_sig) + 1;
-	vin->unlock[pos] = ECCKEY_INT_LEN * 4 + 1;
-	vin->unlock[pos+1] = 2 - (ecckey->py[0] & 1);
-	memcpy(vin->unlock+pos+2, ecckey->px, ECCKEY_INT_LEN * 4);
-	pos += ECCKEY_INT_LEN * 4 + 2;
-	vin->unlock[pos] = OP_CALCULATE_Y;
-	assert(pos + 1 == vin->unlock_len);
 
 	free(pool);
 	return tx;
@@ -586,6 +596,25 @@ int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
 	return 1;
 }
 
+static int tx_vout_set(struct tx_etoken_out *vout, int tokid,
+		unsigned long value, const unsigned char *payto)
+{
+	int retv = 0;
+
+	vout->lock_len = 25;
+	vout->lock = malloc(25);
+	if (!check_pointer(vout->lock))
+		retv = -ENOMEM;
+	vout->lock[0] = OP_DUP;
+	vout->lock[1] = OP_RIPEMD160;
+	vout->lock[2] = RIPEMD_LEN;
+	memcpy(vout->lock+3, payto, RIPEMD_LEN);
+	vout->lock[23] = OP_EQUALVERIFY;
+	vout->lock[24] = OP_CHECKSIG;
+	etoken_init(&vout->etk, tokid, value, 0);
+	return retv;
+}
+
 static void txrec_init(struct txrec *tx)
 {
 	struct timespec tm;
@@ -614,19 +643,10 @@ int tx_trans_begin(struct txrec **ptr, unsigned int tokid,
 		retv = -ENOMEM;
 		goto err_exit_10;
 	}
-	vout->lock_len = 25;
-	vout->lock = malloc(25);
-	if (!check_pointer(vout->lock)) {
-		retv = -ENOMEM;
+
+	retv = tx_vout_set(vout, tokid, value, payto);
+	if (retv != 0)
 		goto err_exit_20;
-	}
-	vout->lock[0] = OP_DUP;
-	vout->lock[1] = OP_RIPEMD160;
-	vout->lock[2] = RIPEMD_LEN;
-	memcpy(vout->lock+3, payto, RIPEMD_LEN);
-	vout->lock[23] = OP_EQUALVERIFY;
-	vout->lock[24] = OP_CHECKSIG;
-	etoken_init(&vout->etk, tokid, value, 0);
 
 	txptr->vout_num = 1;
 	txptr->vouts = malloc(sizeof(struct tx_etoken_out **));
@@ -683,11 +703,68 @@ err_exit_10:
 	return retv;
 }
 
+int tx_trans_sup(unsigned long txptr, unsigned long value,
+		const unsigned char *payto)
+{
+	int retv = 0, etoken_id, i;
+	struct txrec *tx = (struct txrec *)txptr;
+	struct tx_etoken_out **vouts, **p_vout, **c_vout, *vout;
+
+	if (tx->vout_num == 0 || tx->vouts == NULL || *tx->vouts == NULL) {
+		logmsg(LOG_ERR, "Cannot supplement a record withou vout.\n");
+		return -1;
+	}
+	vout = *tx->vouts;
+	etoken_id = vout->etk.token_id;
+
+	vout = malloc(sizeof(struct tx_etoken_out));
+	if (!check_pointer(vout))
+		return -ENOMEM;
+	retv = tx_vout_set(vout, etoken_id, value, payto);
+	if (retv != 0)
+		goto err_exit_10;
+	vouts = malloc((tx->vout_num+1)*sizeof(struct tx_etoken_out));
+	if (!check_pointer(vouts)) {
+		retv = -ENOMEM;
+		goto err_exit_10;
+	}
+	p_vout = tx->vouts;
+	c_vout = vouts;
+	for (i = 0; i < tx->vout_num; i++)
+		*c_vout++ = *p_vout++;
+	*c_vout = vout;
+	if (tx->vouts)
+		free(tx->vouts);
+	tx->vouts = vouts;
+
+	return retv;
+
+err_exit_10:
+	free(vout);
+	return retv;
+}
+
+int tx_trans_sign(unsigned long txptr, unsigned char *buf, int buflen, 
+		const struct ecc_key *skey, int idx)
+{
+	struct txrec *tx = (struct txrec *)txptr;
+	int retv = 0;
+
+	assert(idx < tx->vin_num);
+	retv = tx_sign((char *)buf, buflen, tx, idx, skey);
+	return retv;
+}
+
 int tx_trans_end(char *buf, int buflen, unsigned long txptr)
 {
 	struct txrec *tx = (struct txrec *)txptr;
+	int retv, len;
 
 	printf("tx_trans_end, TX in: %d\n", tx->vin_num);
-	tx_destroy(tx);
-	return 0;
+	len = tx_serialize(buf, buflen, tx, 1);
+	if (len > buflen)
+		retv = -1;
+	else
+		tx_destroy(tx);
+	return retv;
 }
