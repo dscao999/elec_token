@@ -42,6 +42,7 @@ void tx_destroy(struct txrec *tx)
 		}
 		free(tx->vins);
 	}
+	printf("freed tx->vins: %p\n", tx->vins);
 	if (tx->vouts) {
 		nitem = tx->vout_num;
 		txouts = tx->vouts;
@@ -54,6 +55,7 @@ void tx_destroy(struct txrec *tx)
 		}
 		free(tx->vouts);
 	}
+	printf("freed tx->vouts: %p\n", tx->vouts);
 
 	free(tx);
 }
@@ -278,12 +280,12 @@ struct txrec *tx_deserialize(const char *buf, int buflen)
 
 	tx->vins = malloc(sizeof(struct tx_etoken_in *)*tx->vin_num);
 	if (!check_pointer(tx->vins)) {
-		logmsg(LOG_ERR, "Illformed tx record. \n");
+		logmsg(LOG_ERR, "Out of Memory. \n");
 		goto err_exit_10;
 	}
 	tx->vouts = malloc(sizeof(struct tx_etoken_out *)*tx->vout_num);
 	if (!check_pointer(tx->vouts)) {
-		logmsg(LOG_ERR, "Illformed tx record.\n");
+		logmsg(LOG_ERR, "Out of Memory.\n");
 		goto err_exit_10;
 	}
 	memset(tx->vins, 0, sizeof(struct tx_etoken_in *)*tx->vin_num);
@@ -625,6 +627,32 @@ static void txrec_init(struct txrec *tx)
 	tx->tm = tm.tv_sec;
 }
 
+static void tx_tryerror(const struct txrec *tx)
+{
+	char *buf;
+	struct txrec *mtx;
+	int len;
+	FILE *fh;
+
+	printf("\nTX vin: %d, vout: %d\n", tx->vin_num, tx->vout_num);
+	buf = malloc(2048);
+	len = tx_serialize(buf, 2048, tx, 0);
+	printf("Serialized Length: %d\n", len);
+
+	fh = fopen("/tmp/txrec-ser.dat", "wb");
+	fwrite(buf, 1, len, fh);
+	fclose(fh);
+
+	mtx = tx_deserialize(buf, len);
+	if (mtx) {
+		printf("Deserialize success!\n");
+		printf("DE TX vin: %d, vout: %d\n", mtx->vin_num, mtx->vout_num);
+		tx_destroy(mtx);
+	} else
+		printf("Failed to deserialize!\n");
+	free(buf);
+}
+
 int tx_trans_begin(struct txrec **ptr, unsigned int tokid,
 		unsigned long value, const unsigned char *payto)
 {
@@ -656,6 +684,9 @@ int tx_trans_begin(struct txrec **ptr, unsigned int tokid,
 	}
 	*txptr->vouts = vout;
 	*ptr = txptr;
+
+	tx_tryerror(txptr);
+
 	return retv;
 
 err_exit_30:
@@ -696,6 +727,8 @@ int tx_trans_add(unsigned long txptr, unsigned char *txid, int vout_idx)
 	tx->vins = vins;
 	tx->vin_num += 1;
 
+	printf("%s: vin: %d, vout: %d\n", __FUNCTION__, tx->vin_num, tx->vout_num);
+	tx_tryerror(tx);
 	return retv;
 
 err_exit_10:
@@ -736,7 +769,10 @@ int tx_trans_sup(unsigned long txptr, unsigned long value,
 	if (tx->vouts)
 		free(tx->vouts);
 	tx->vouts = vouts;
+	tx->vout_num += 1;
 
+	printf("%s: vin: %d, vout: %d\n", __FUNCTION__, tx->vin_num, tx->vout_num);
+	tx_tryerror(tx);
 	return retv;
 
 err_exit_10:
@@ -750,8 +786,12 @@ int tx_trans_sign(unsigned long txptr, unsigned char *buf, int buflen,
 	struct txrec *tx = (struct txrec *)txptr;
 	int retv = 0;
 
+	printf("VIN idx: %d\n", idx);
 	assert(idx < tx->vin_num);
 	retv = tx_sign((char *)buf, buflen, tx, idx, skey);
+
+	printf("%s: vin: %d, vout: %d\n", __FUNCTION__, tx->vin_num, tx->vout_num);
+	tx_tryerror(tx);
 	return retv;
 }
 
