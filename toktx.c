@@ -46,7 +46,7 @@ void tx_destroy(struct txrec *tx)
 	if (tx->vouts) {
 		nitem = tx->vout_num;
 		txouts = tx->vouts;
-		for (i = 0; i < nitem && *txouts; i++, txout++) {
+		for (i = 0; i < nitem && *txouts; i++, txouts++) {
 			txout = *txouts;
 			etoken_option_del(&txout->etk);
 			if (txout->lock)
@@ -786,11 +786,11 @@ int tx_trans_sign(unsigned long txptr, unsigned char *buf, int buflen,
 	struct txrec *tx = (struct txrec *)txptr;
 	int retv = 0;
 
+	printf("%s: vin: %d, vout: %d\n", __FUNCTION__, tx->vin_num, tx->vout_num);
 	printf("VIN idx: %d\n", idx);
 	assert(idx < tx->vin_num);
 	retv = tx_sign((char *)buf, buflen, tx, idx, skey);
 
-	printf("%s: vin: %d, vout: %d\n", __FUNCTION__, tx->vin_num, tx->vout_num);
 	tx_tryerror(tx);
 	return retv;
 }

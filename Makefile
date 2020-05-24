@@ -8,7 +8,7 @@ VPATH = ../ecc256
 
 .PHONY: all clean release
 
-all: genblk toktx ../lib/libtoktx.so tx_service tx_logging
+all: genblk toktx ../lib/libtoktx.so tx_service tx_logging edebug
 
 eccobj = ecc_secp256k1.o sha256.o dscrc.o base64.o dsaes.o ripemd160.o alsarec.o
 
@@ -24,6 +24,9 @@ tx_service: tx_service.o toktx.o tokens.o virtmach.o global_param.o \
 
 tx_logging: tx_logging.o tok_block.o toktx.o global_param.o virtmach.o \
 	tokens.o $(eccobj)
+	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
+
+edebug: etoken_debug.o toktx.o tokens.o global_param.o virtmach.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
 
 clean:
