@@ -55,15 +55,11 @@ void etoken_init(struct etoken *et, int token, unsigned long value, int days)
 		et->expire = tm.tv_sec + days*24*3600;
 }
 
-struct etoken *etoken_clone(const struct etoken *cet, unsigned long value)
+int etoken_clone(struct etoken *et, const struct etoken *cet,
+		unsigned long value)
 {
-	struct etoken *et;
 	const struct etk_option *etkopt;
 	struct etk_option *prev, *nopt;
-
-	et = malloc(sizeof(struct etoken));
-	if (!check_pointer(et))
-		return et;
 
 	*et = *cet;
 	et->value = value;
@@ -75,7 +71,7 @@ struct etoken *etoken_clone(const struct etoken *cet, unsigned long value)
 		nopt = malloc(sizeof(struct etk_option) + etkopt->len);
 		if (!check_pointer(nopt)) {
 			etoken_option_del(et);
-			return NULL;
+			return -ENOMEM;
 		}
 		nopt->next = NULL;
 		if (prev == NULL)
@@ -89,7 +85,7 @@ struct etoken *etoken_clone(const struct etoken *cet, unsigned long value)
 		etkopt = etkopt->next;
 	}
 	
-	return et;
+	return 0;
 }
 
 int etoken_option_serialize(char *buf, int buflen, const struct etoken *cet)

@@ -42,7 +42,6 @@ void tx_destroy(struct txrec *tx)
 		}
 		free(tx->vins);
 	}
-	printf("freed tx->vins: %p\n", tx->vins);
 	if (tx->vouts) {
 		nitem = tx->vout_num;
 		txouts = tx->vouts;
@@ -55,7 +54,6 @@ void tx_destroy(struct txrec *tx)
 		}
 		free(tx->vouts);
 	}
-	printf("freed tx->vouts: %p\n", tx->vouts);
 
 	free(tx);
 }
@@ -415,7 +413,6 @@ static unsigned char *tx_sales_query(const char *khash, int eid, int *lock_len)
 	pbind[1].buffer_type = MYSQL_TYPE_SHORT;
 	pbind[1].buffer = &etok_id;
 	pbind[1].is_unsigned = 1;
-	printf("etoken_id = %hu, key hash: %s\n", etok_id, pkhash);
 	mysql_retv = mysql_stmt_bind_param(mstmt, pbind);
 	if (mysql_retv) {
 		logmsg(LOG_ERR, "mysql_stmt_bind_param failed: %s\n",
@@ -481,8 +478,10 @@ static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
 	int len;
 	unsigned char *lock;
 
-	if (txin->gensis != 0x0ff)
+	if (txin->gensis != 0x0ff) {
+		printf("Cannot verify a non-gensis transaction.\n");
 		return NULL;
+	}
 	*val = 0xfffffffffffffffful;
 
 	memcpy(ekey.px, txin->txid, SHA_DGST_LEN);
@@ -592,28 +591,47 @@ int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
 		tx_get_vout_owner(vo->owner, vout->lock, vout->lock_len);
 		len = bin2str_b64(ripe_str, sizeof(ripe_str), vo->owner, RIPEMD_LEN);
 		ripe_str[len] = 0;
-		printf("Owner: %s\n", ripe_str);
 	}
 
 	return 1;
 }
 
-static int tx_vout_set(struct tx_etoken_out *vout, int tokid,
-		unsigned long value, const unsigned char *payto)
+static int tx_vout_set_lock(struct tx_etoken_out *vout, const unsigned char *payto)
 {
-	int retv = 0;
-
 	vout->lock_len = 25;
 	vout->lock = malloc(25);
 	if (!check_pointer(vout->lock))
-		retv = -ENOMEM;
+		return -ENOMEM;
 	vout->lock[0] = OP_DUP;
 	vout->lock[1] = OP_RIPEMD160;
 	vout->lock[2] = RIPEMD_LEN;
 	memcpy(vout->lock+3, payto, RIPEMD_LEN);
 	vout->lock[23] = OP_EQUALVERIFY;
 	vout->lock[24] = OP_CHECKSIG;
+	return 0;
+}
+
+static int tx_vout_set(struct tx_etoken_out *vout, int tokid,
+		unsigned long value, const unsigned char *payto)
+{
+	int retv;
+
+	retv = tx_vout_set_lock(vout, payto);
+	if (retv != 0)
+		return retv;
 	etoken_init(&vout->etk, tokid, value, 0);
+	return retv;
+}
+
+static int tx_vout_copy(struct tx_etoken_out *vout, const struct etoken *cet,
+		unsigned long value, const unsigned char *payto)
+{
+	int retv;
+
+	retv = tx_vout_set_lock(vout, payto);
+	if (retv != 0)
+		return retv;
+	etoken_clone(&vout->etk, cet, value);
 	return retv;
 }
 
@@ -634,22 +652,27 @@ static void tx_tryerror(const struct txrec *tx)
 	int len;
 	FILE *fh;
 
-	printf("\nTX vin: %d, vout: %d\n", tx->vin_num, tx->vout_num);
 	buf = malloc(2048);
 	len = tx_serialize(buf, 2048, tx, 0);
-	printf("Serialized Length: %d\n", len);
+	mtx = tx_deserialize(buf, len);
+	if (!mtx)
+		goto exit_10;
+	tx_destroy(mtx);
 
+	len = tx_serialize(buf, 2048, tx, 1);
 	fh = fopen("/tmp/txrec-ser.dat", "wb");
 	fwrite(buf, 1, len, fh);
 	fclose(fh);
-
 	mtx = tx_deserialize(buf, len);
-	if (mtx) {
-		printf("Deserialize success!\n");
-		printf("DE TX vin: %d, vout: %d\n", mtx->vin_num, mtx->vout_num);
-		tx_destroy(mtx);
-	} else
-		printf("Failed to deserialize!\n");
+	if (!mtx)
+		goto exit_10;
+	len = tx_serialize(buf, 2048, mtx, 1);
+	fh = fopen("/tmp/txrec-ser1.dat", "wb");
+	fwrite(buf, 1, len, fh);
+	fclose(fh);
+	tx_destroy(mtx);
+	
+exit_10:
 	free(buf);
 }
 
@@ -727,7 +750,6 @@ int tx_trans_add(unsigned long txptr, unsigned char *txid, int vout_idx)
 	tx->vins = vins;
 	tx->vin_num += 1;
 
-	printf("%s: vin: %d, vout: %d\n", __FUNCTION__, tx->vin_num, tx->vout_num);
 	tx_tryerror(tx);
 	return retv;
 
@@ -739,21 +761,22 @@ err_exit_10:
 int tx_trans_sup(unsigned long txptr, unsigned long value,
 		const unsigned char *payto)
 {
-	int retv = 0, etoken_id, i;
+	int retv = 0, i;
 	struct txrec *tx = (struct txrec *)txptr;
 	struct tx_etoken_out **vouts, **p_vout, **c_vout, *vout;
+	const struct etoken *etkptr;
 
 	if (tx->vout_num == 0 || tx->vouts == NULL || *tx->vouts == NULL) {
 		logmsg(LOG_ERR, "Cannot supplement a record withou vout.\n");
 		return -1;
 	}
 	vout = *tx->vouts;
-	etoken_id = vout->etk.token_id;
+	etkptr = &vout->etk;
 
 	vout = malloc(sizeof(struct tx_etoken_out));
 	if (!check_pointer(vout))
 		return -ENOMEM;
-	retv = tx_vout_set(vout, etoken_id, value, payto);
+	retv = tx_vout_copy(vout, etkptr, value, payto);
 	if (retv != 0)
 		goto err_exit_10;
 	vouts = malloc((tx->vout_num+1)*sizeof(struct tx_etoken_out));
@@ -771,7 +794,6 @@ int tx_trans_sup(unsigned long txptr, unsigned long value,
 	tx->vouts = vouts;
 	tx->vout_num += 1;
 
-	printf("%s: vin: %d, vout: %d\n", __FUNCTION__, tx->vin_num, tx->vout_num);
 	tx_tryerror(tx);
 	return retv;
 

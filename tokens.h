@@ -33,7 +33,8 @@ int etoken_option_deserialize(const char *buf, int buflen,
 int etoken_expired(const struct etoken *et);
 
 void etoken_init(struct etoken *et, int token, unsigned long value, int days);
-struct etoken *etoken_clone(const struct etoken *et, unsigned long value);
+int etoken_clone(struct etoken *et, const struct etoken *cet,
+		unsigned long value);
 
 struct etoken *etoken_new(int token, unsigned long value, int days);
 
