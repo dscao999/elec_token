@@ -287,7 +287,7 @@ struct txrec *tx_deserialize(const char *buf, int buflen)
 		goto err_exit_10;
 	}
 	memset(tx->vins, 0, sizeof(struct tx_etoken_in *)*tx->vin_num);
-	memset(tx->vouts, 0, sizeof(struct tx_etoken_out *)*tx->vin_num);
+	memset(tx->vouts, 0, sizeof(struct tx_etoken_out *)*tx->vout_num);
 
 	nitem = tx->vin_num;
 	txins = tx->vins;
@@ -818,13 +818,13 @@ int tx_trans_sign(unsigned long txptr, unsigned char *buf, int buflen,
 int tx_trans_end(char *buf, int buflen, unsigned long txptr)
 {
 	struct txrec *tx = (struct txrec *)txptr;
-	int retv, len;
+	int len;
 
 	printf("tx_trans_end, TX in: %d\n", tx->vin_num);
 	len = tx_serialize(buf, buflen, tx, 1);
 	if (len > buflen)
-		retv = -1;
+		len = -1;
 	else
 		tx_destroy(tx);
-	return retv;
+	return len;
 }
