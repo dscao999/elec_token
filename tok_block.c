@@ -4,6 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <my_global.h>
+#include <mysql.h>
 #include "tok_block.h"
 #include "ripemd160.h"
 #include "loglog.h"
@@ -15,6 +17,12 @@ static const unsigned short VER = 100;
 
 static const unsigned char gensis[] = "Startup of Electronic Token " \
 				      "Blockchain. All started from Oct 2019 with Dashi Cao.";
+
+unsigned char * (*tx_from_blockchain)(const struct tx_etoken_in *txin,
+		int *lock_len, unsigned long *val) = NULL;
+
+static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
+		int *lock_len, unsigned long *val);
 
 static int num_zerobits(const unsigned char *hash)
 {
@@ -207,4 +215,226 @@ void bl_header_init(struct bl_header *blkhdr, const unsigned char *dgst)
 	blkhdr->nonce = ripe.H[1];
 	blkhdr->nonce = (blkhdr->nonce << 32) | ripe.H[0];
 	blkhdr->node_id = g_param->node.nodeid;
+}
+
+struct txdb_con {
+	MYSQL *mcon;
+	MYSQL_STMT *utm, *btm;
+	const char *utxo_query, *blk_query;
+	unsigned char txid[SHA_DGST_LEN];
+	unsigned long txid_len;
+	unsigned long blockid;
+	MYSQL_BIND pmbnd[2], rsbnd[1];
+	void *blkbuf;
+	unsigned long blklen;
+	unsigned char vout_idx;
+};
+
+struct txdb_con txcon = {
+	.utxo_query = "SELECT blockid FROM utxo WHERE txid = ? AND " \
+		       "vout_idx = ? AND in_process = 0",
+	.blk_query = "SELECT blockdata FROM blockchain WHERE blockid = ?"
+};
+
+int txdb_con_init(struct txdb_con *txcon)
+{
+	int retv = 0;
+
+	txcon->mcon = mysql_init(NULL);
+	if (!check_pointer(txcon->mcon))
+		return -ENOMEM;
+	if (mysql_real_connect(txcon->mcon, g_param->db.host, g_param->db.user,
+				g_param->db.passwd, g_param->db.dbname, 0,
+				NULL, 0) == NULL) {
+		retv = -mysql_errno(txcon->mcon);
+		logmsg(LOG_ERR, "Cannot connect to DB: %s\n",
+				mysql_error(txcon->mcon));
+		goto exit_10;
+	}
+	txcon->utm = mysql_stmt_init(txcon->mcon);
+	if (!check_pointer(txcon->utm)) {
+		retv = -mysql_stmt_errno(txcon->utm);
+		logmsg(LOG_ERR, "Cannot get statement handle: %s -> %s\n",
+				txcon->utxo_query, mysql_error(txcon->mcon));
+		goto exit_10;
+	}
+	if (mysql_stmt_prepare(txcon->utm, txcon->utxo_query,
+				strlen(txcon->utxo_query))) {
+		logmsg(LOG_ERR, "SQL statement preparation failed: %s->%s\n",
+				txcon->utxo_query, mysql_stmt_error(txcon->utm));
+		retv = -mysql_stmt_errno(txcon->utm);
+		goto exit_20;
+	}
+	memset(txcon->pmbnd, 0, sizeof(txcon->pmbnd));
+	txcon->pmbnd[0].buffer_type = MYSQL_TYPE_BLOB;
+	txcon->pmbnd[0].buffer = txcon->txid;
+	txcon->pmbnd[0].buffer_length = SHA_DGST_LEN;
+	txcon->pmbnd[0].length = &txcon->txid_len;
+	txcon->pmbnd[1].buffer_type = MYSQL_TYPE_TINY;
+	txcon->pmbnd[1].buffer = &txcon->vout_idx;
+	txcon->pmbnd[1].is_unsigned = 1;
+	if (mysql_stmt_bind_param(txcon->utm, txcon->pmbnd)) {
+		logmsg(LOG_ERR, "SQL Statment bind failed: %s->%s\n",
+				txcon->utxo_query, mysql_stmt_error(txcon->utm));
+		retv = -mysql_stmt_errno(txcon->utm);
+		goto exit_20;
+	}
+	memset(txcon->rsbnd, 0, sizeof(txcon->rsbnd));
+	txcon->rsbnd[0].buffer_type = MYSQL_TYPE_LONGLONG;
+	txcon->rsbnd[0].buffer = &txcon->blockid;
+	txcon->rsbnd[0].is_unsigned = 1;
+	if (mysql_stmt_bind_result(txcon->utm, txcon->rsbnd)) {
+		logmsg(LOG_ERR, "SQL Statement bind result failed: %s->%s\n",
+				txcon->utxo_query, mysql_stmt_error(txcon->utm));
+		retv = -mysql_stmt_errno(txcon->utm);
+		goto exit_20;
+	}
+
+	txcon->btm = mysql_stmt_init(txcon->mcon);
+	if (!check_pointer(txcon->btm)) {
+		retv = -mysql_stmt_errno(txcon->btm);
+		logmsg(LOG_ERR, "Cannot get statement handle: %s -> %s\n",
+				txcon->blk_query, mysql_error(txcon->mcon));
+		goto exit_20;
+	}
+	if (mysql_stmt_prepare(txcon->btm, txcon->blk_query,
+				strlen(txcon->blk_query))) {
+		logmsg(LOG_ERR, "SQL statement preparation failed: %s->%s\n",
+				txcon->blk_query, mysql_stmt_error(txcon->btm));
+		retv = -mysql_stmt_errno(txcon->btm);
+		goto exit_30;
+	}
+	memset(txcon->pmbnd, 0, sizeof(txcon->pmbnd));
+	txcon->pmbnd[0].buffer_type = MYSQL_TYPE_LONGLONG;
+	txcon->pmbnd[0].buffer = &txcon->blockid;
+	txcon->pmbnd[0].is_unsigned = 1;
+	if (mysql_stmt_bind_param(txcon->btm, txcon->pmbnd)) {
+		logmsg(LOG_ERR, "SQL Statment bind failed: %s->%s\n",
+				txcon->blk_query, mysql_stmt_error(txcon->btm));
+		retv = -mysql_stmt_errno(txcon->btm);
+		goto exit_30;
+	}
+	txcon->blkbuf = malloc(MAX_BLKSIZE);
+	if (!check_pointer(txcon->blkbuf)) {
+		retv = -ENOMEM;
+		goto exit_30;
+	}
+	memset(txcon->rsbnd, 0, sizeof(txcon->rsbnd));
+	txcon->rsbnd[0].buffer_type = MYSQL_TYPE_BLOB;
+	txcon->rsbnd[0].buffer = txcon->blkbuf;
+	txcon->rsbnd[0].buffer_length = MAX_BLKSIZE;
+	txcon->rsbnd[0].length = &txcon->blklen;
+	if (mysql_stmt_bind_result(txcon->btm, txcon->rsbnd)) {
+		logmsg(LOG_ERR, "SQL Statement bind result failed: %s->%s\n",
+				txcon->blk_query, mysql_stmt_error(txcon->btm));
+		retv = -mysql_stmt_errno(txcon->btm);
+		goto exit_30;
+	}
+	return retv;
+
+exit_30:
+	mysql_stmt_close(txcon->btm);
+exit_20:
+	mysql_stmt_close(txcon->utm);
+exit_10:
+	mysql_close(txcon->mcon);
+	return retv;
+}
+
+static inline void txdb_con_exit(struct txdb_con *txcon)
+{
+	free(txcon->blkbuf);
+	if (txcon->btm)
+		mysql_stmt_close(txcon->btm);
+	if (txcon->utm)
+		mysql_stmt_close(txcon->utm);
+	if (txcon->mcon)
+		mysql_close(txcon->mcon);
+}
+
+static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
+		int *lock_len, unsigned long *val)
+{
+	unsigned char *lock = NULL;
+	struct etk_block *blk;
+	struct bl_header *blkhdr;
+	struct txrec_area *txarea;
+	struct txrec *tx;
+	int tx_idx, numret;
+	struct tx_etoken_out *vout;
+
+	*lock_len = 0;
+	memcpy(txcon.txid, txin->txid, SHA_DGST_LEN);
+	txcon.txid_len = SHA_DGST_LEN;
+	txcon.vout_idx = txin->vout_idx;
+	txcon.blockid = 0;
+	if (mysql_stmt_execute(txcon.utm)) {
+		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",
+				txcon.utxo_query, mysql_stmt_error(txcon.utm));
+		goto exit_10;
+	}
+	if (mysql_stmt_store_result(txcon.utm)) {
+		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",
+				txcon.utxo_query, mysql_stmt_error(txcon.utm));
+		goto exit_10;
+	}
+	numret = 0;
+	while (mysql_stmt_fetch(txcon.utm) != MYSQL_NO_DATA)
+		numret += 1;
+	mysql_stmt_free_result(txcon.utm);
+	assert(numret == 1);
+	if (mysql_stmt_execute(txcon.btm)) {
+		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",
+				txcon.blk_query, mysql_stmt_error(txcon.btm));
+		goto exit_10;
+	}
+	if (mysql_stmt_store_result(txcon.btm)) {
+		logmsg(LOG_ERR, "Statement Execution Failed: %s->%s\n",
+				txcon.blk_query, mysql_stmt_error(txcon.btm));
+		goto exit_10;
+	}
+	numret = 0;
+	while (mysql_stmt_fetch(txcon.btm) != MYSQL_NO_DATA)
+		numret += 1;
+	mysql_stmt_free_result(txcon.btm);
+	assert(numret == 1);
+	if (txcon.blklen == 0) {
+		logmsg(LOG_ERR, "Invalid block Retrieved!\n");
+		goto exit_10;
+	}
+	blk = txcon.blkbuf;
+	blkhdr = txcon.blkbuf;
+	txarea = blk->tx_area;
+	tx_idx = 0;
+	while (memcmp(txarea->txhash, txin->txid, SHA_DGST_LEN) != 0 &&
+			tx_idx < blkhdr->numtxs) {
+		txarea = txrec_area_next(txarea);
+		tx_idx += 1;
+	}
+	assert(tx_idx < blkhdr->numtxs);
+	tx = tx_deserialize((const char *)txarea->txbuf, txarea->txlen);
+	if (!tx)
+		goto exit_10;
+	assert(txin->vout_idx < tx->vout_num);
+	vout = *(tx->vouts + txin->vout_idx);
+	*val += vout->etk.value;
+	*lock_len = vout->lock_len;
+	lock = malloc(vout->lock_len);
+	if (lock)
+		memcpy(lock, vout->lock, vout->lock_len);
+	tx_destroy(tx);
+
+exit_10:
+	return lock;
+}
+
+int tok_block_init(void)
+{
+	tx_from_blockchain = tx_blockchain;
+	return txdb_con_init(&txcon);
+}
+
+void tok_block_exit(void)
+{
+	txdb_con_exit(&txcon);
 }

@@ -5,6 +5,8 @@
 #include "tokens.h"
 #include "ecc_secp256k1.h"
 
+#define MAX_TXSIZE 2048
+
 struct txrec_vout {
 	unsigned long value;
 	unsigned long blockid;
@@ -56,5 +58,8 @@ int tx_verify(const struct txrec *tx);
 
 int tx_get_vout(const struct txrec *tx, struct txrec_vout *vout,
 		unsigned long blkid);
+
+extern unsigned char * (*tx_from_blockchain)(const struct tx_etoken_in *txin,
+		int *lock_len, unsigned long *val);
 
 #endif /* TOKTX_DSCAO__ */

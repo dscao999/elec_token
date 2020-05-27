@@ -1,8 +1,7 @@
 #include "global_param.h"
 #include "ecc_secp256k1.h"
 #include "alsarec.h"
-
-#define MAX_BLKSIZE (128*1024)
+#include "tok_block.h"
 
 static struct global_param all_param = {
 	.db = {
@@ -18,7 +17,7 @@ static struct global_param all_param = {
 		.numths = 2
 	},
 	.tx = {
-		.max_txsize = 2048
+		.max_txsize = MAX_TXSIZE
 	},
 	.mine = {
 		.zbits = 25,
@@ -37,10 +36,15 @@ void global_param_init(const char *cnf, int ecc, int alsa)
 		alsa_init(NULL);
 	all_param.ecc = ecc;
 	all_param.alsa = alsa;
+	if (tok_block_init() != 0) {
+		logmsg(LOG_ERR, "tok_block_init failed!\n");
+		exit(10);
+	}
 }
 
 void global_param_exit(void)
 {
+	tok_block_exit();
 	if (g_param->ecc)
 		ecc_exit();
 	if (g_param->alsa)

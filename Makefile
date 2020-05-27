@@ -26,7 +26,7 @@ tx_logging: tx_logging.o tok_block.o toktx.o global_param.o virtmach.o \
 	tokens.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
 
-edebug: etoken_debug.o toktx.o tokens.o global_param.o virtmach.o $(eccobj)
+edebug: etoken_debug.o tok_block.o toktx.o tokens.o global_param.o virtmach.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
 
 clean:

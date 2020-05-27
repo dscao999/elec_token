@@ -478,12 +478,10 @@ static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
 	int len;
 	unsigned char *lock;
 
-	if (txin->gensis != 0x0ff) {
-		printf("Cannot verify a non-gensis transaction.\n");
-		return NULL;
-	}
-	*val = 0xfffffffffffffffful;
+	if (txin->gensis != 0x0ff)
+		return tx_from_blockchain(txin, lock_len, val);
 
+	*val = 0xfffffffffffffffful;
 	memcpy(ekey.px, txin->txid, SHA_DGST_LEN);
 	ecc_get_public_y(&ekey, txin->odd);
 	len = ecc_key_hash(khash, 32, &ekey);

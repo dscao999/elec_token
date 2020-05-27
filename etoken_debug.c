@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include "toktx.h"
+#include "global_param.h"
 
 int main(int argc, char *argv[])
 {
@@ -23,7 +24,7 @@ int main(int argc, char *argv[])
 	retv = fread(buf, 1, fsize, fin);
 	assert(retv == fsize);
 	fclose(fin);
-	ecc_init();
+	global_param_init(NULL, 1, 0);
 
 	tx = tx_deserialize(buf, fsize);
 	printf("TX vins: %d, vouts: %d\n", tx->vin_num, tx->vout_num);
@@ -34,5 +35,6 @@ int main(int argc, char *argv[])
 		printf("Transaction verified.\n");
 	tx_destroy(tx);
 
+	global_param_exit();
 	return retv;
 }

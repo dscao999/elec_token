@@ -5,6 +5,8 @@
 #include "ecc_secp256k1.h"
 #include "toktx.h"
 
+#define MAX_BLKSIZE	(128*1024)
+
 struct txrec_area {
 	unsigned long txlen;
 	unsigned char txhash[SHA_DGST_LEN];
@@ -49,5 +51,8 @@ static inline struct txrec *txrec_area_deser(const struct txrec_area *txbuf)
 {
 	return tx_deserialize((const char *)txbuf->txbuf, txbuf->txlen);
 }
+
+int tok_block_init(void);
+void tok_block_exit(void);
 
 #endif /* TOK_BLOCK_DSCAO__ */
