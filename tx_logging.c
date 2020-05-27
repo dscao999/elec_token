@@ -757,7 +757,7 @@ static int wait_for_txs(int pipd)
 		}
 		nanosleep(&intvl, NULL);
 	} while (numb == -1 && errno == EAGAIN && global_exit == 0);
-	if (numb == -1) {
+	if (numb == -1 && errno != EAGAIN) {
 		logmsg(LOG_ERR, "Read pipe failed: %s\n", strerror(errno));
 		return numb;
 	}
@@ -774,7 +774,7 @@ static int wait_for_txs(int pipd)
 		} else if (numb > 0)
 			txs += 1;
 		secs += 1;
-	} while (numb == -1 && errno == EAGAIN && global_exit == 0 && txs < 10);
+	} while (txs < 10);
 	if (numb == -1 && errno != EAGAIN) {
 		logmsg(LOG_ERR, "Read pipe failed: %s\n", strerror(errno));
 		return numb;

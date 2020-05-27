@@ -84,29 +84,15 @@ static int txrec_verify(int sock, const struct winfo *wif,
 	struct txrec *tx;
 	struct sockaddr_in *sockaddr;
 
+	suc = 0;
 	sha256_dgst_2str(txp->txop.sha_dgst,
 			(const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
-	suc = 3;
-	tx = tx_deserialize(wif->wpkt.pkt, wif->wpkt.len);
-	if (!tx)
-		goto exit_100;
-	suc = tx_verify(tx);
-	tx_destroy(tx);
-	if (suc == 0)
-		goto exit_100;
-
-	if (mysql_query(txp->mcon, "START TRANSACTION")) {
-		logmsg(LOG_ERR, "START TRANSACTION failed: %s\n",
-				mysql_error(txp->mcon));
-		suc = -1;
-		goto exit_100;
-	}
 	txp->txop.sha_len = SHA_DGST_LEN;
 	if (mysql_stmt_execute(txp->qmt)) {
 		logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n", txid_query,
 				mysql_stmt_error(txp->qmt));
 		suc = -1;
-		goto exit_100;
+		goto exit_10;
 	}
 	txcnt = 0;
 	mysql_retv = mysql_stmt_fetch(txp->qmt);
@@ -114,21 +100,50 @@ static int txrec_verify(int sock, const struct winfo *wif,
 		txcnt += 1;
 		mysql_retv = mysql_stmt_fetch(txp->qmt);
 	}
-	if (txcnt > 0)
-		suc = 2;
 	mysql_stmt_free_result(txp->qmt);
+	if (txcnt > 0) {
+		suc = 2;
+		goto exit_10;
+	}
 
-exit_100:
+	tx = tx_deserialize(wif->wpkt.pkt, wif->wpkt.len);
+	if (!tx)
+		goto exit_10;
+	suc = tx_verify(tx);
+	if (suc == 0)
+		goto exit_20;
+
+	if (mysql_query(txp->mcon, "START TRANSACTION")) {
+		logmsg(LOG_ERR, "START TRANSACTION failed: %s\n",
+				mysql_error(txp->mcon));
+		suc = -1;
+		goto exit_20;
+	}
 	txp->txop.txrec_len = wif->wpkt.len;
-	if (suc == 1 && mysql_stmt_execute(txp->imt)) {
-		logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n", txid_query,
-				mysql_stmt_error(txp->qmt));
+       	if (mysql_stmt_execute(txp->imt)) {
+		logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n",
+				txid_query, mysql_stmt_error(txp->qmt));
 		suc = -1;
+		goto exit_30;
 	}
-	if (mysql_commit(txp->mcon)) {
-		logmsg(LOG_ERR, "COMMIT failed: %s\n", mysql_error(txp->mcon));
-		suc = -1;
+
+exit_30:
+	if (suc == 1) {
+		if (mysql_commit(txp->mcon)) {
+			logmsg(LOG_ERR, "COMMIT failed: %s\n",
+					mysql_error(txp->mcon));
+			suc = -1;
+		}
+	} else {
+		if (mysql_rollback(txp->mcon)) {
+			logmsg(LOG_ERR, "ROLLBACK failed: %s\n",
+					mysql_error(txp->mcon));
+			suc = -1;
+		}
 	}
+exit_20:
+	tx_destroy(tx);
+exit_10:
 	txp->wpkt.ptype = suc;
 	txp->wpkt.len = SHA_DGST_LEN;
 	memcpy(txp->wpkt.pkt, txp->txop.sha_dgst, SHA_DGST_LEN);

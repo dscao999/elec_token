@@ -18,7 +18,7 @@ genblk: genblock.o tok_block.o global_param.o $(eccobj)
 toktx: txtokens.o toktx.o tokens.o virtmach.o global_param.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
 
-tx_service: tx_service.o toktx.o tokens.o virtmach.o global_param.o \
+tx_service: tx_service.o toktx.o tokens.o virtmach.o tok_block.o global_param.o \
 	wcomm.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
 
