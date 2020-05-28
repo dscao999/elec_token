@@ -794,6 +794,8 @@ int main(int argc, char *argv[])
 	struct timespec intvl;
 
 	global_param_init(NULL, 0, 0);
+	if (tok_block_init())
+		exit(10);
 	dbinfo = dbcon_init();
 	if (!dbinfo) {
 		global_param_exit();

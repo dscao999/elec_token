@@ -379,9 +379,13 @@ static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
 		goto exit_10;
 	}
 	numret = 0;
-	while (mysql_stmt_fetch(txcon.utm) != MYSQL_NO_DATA)
+	while (mysql_stmt_fetch(txcon.utm) != MYSQL_NO_DATA) {
 		numret += 1;
+		printf("Block ID: %lu\n", txcon.blockid);
+	}
 	mysql_stmt_free_result(txcon.utm);
+	if (numret == 0)
+		goto exit_10;
 	assert(numret == 1);
 	if (mysql_stmt_execute(txcon.btm)) {
 		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",

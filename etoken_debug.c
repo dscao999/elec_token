@@ -27,12 +27,12 @@ int main(int argc, char *argv[])
 	global_param_init(NULL, 1, 0);
 
 	tx = tx_deserialize(buf, fsize);
-/*	printf("TX vins: %d, vouts: %d\n", tx->vin_num, tx->vout_num);
+	printf("TX vins: %d, vouts: %d\n", tx->vin_num, tx->vout_num);
 	suc = tx_verify(tx);
 	if (suc == 0)
 		printf("Invalid Transaction.\n");
 	else
-		printf("Transaction verified.\n"); */
+		printf("Transaction verified.\n");
 	if (!tx) {
 		printf("Cannot deserialize\n");
 		goto exit_10;

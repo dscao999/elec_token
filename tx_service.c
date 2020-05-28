@@ -20,6 +20,7 @@
 #include "wcomm.h"
 #include "toktx.h"
 #include "base64.h"
+#include "tok_block.h"
 
 static volatile int global_exit = 0;
 
@@ -87,6 +88,13 @@ static int txrec_verify(int sock, const struct winfo *wif,
 	struct txrec *tx;
 	struct sockaddr_in *sockaddr;
 	struct tx_etoken_in **vins, *vin;
+	FILE *fout;
+
+	fout = fopen("/tmp/txrec-ser.dat", "wb");
+	numb = fwrite(wif->wpkt.pkt, 1, wif->wpkt.len, fout);
+	if (numb < wif->wpkt.len)
+		logmsg(LOG_WARNING, "/tmp/txrec-ser.dat write failed.\n");
+	fclose(fout);
 
 	suc = 0;
 	sha256_dgst_2str(txp->txop.sha_dgst,
@@ -163,8 +171,10 @@ exit_20:
 	tx_destroy(tx);
 exit_10:
 	txp->wpkt.ptype = suc;
+	printf("Verified Result: %d\n", suc);
 	txp->wpkt.len = SHA_DGST_LEN;
-	memcpy(txp->wpkt.pkt, txp->txop.sha_dgst, SHA_DGST_LEN);
+	sha256_dgst_2str((unsigned char *)txp->wpkt.pkt,
+			(const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
 	sockaddr = (struct sockaddr_in *)&wif->srcaddr;
 	numb = sendto(sock, &txp->wpkt, sizeof(struct wpacket)+txp->wpkt.len, 0,
 			(const struct sockaddr *)sockaddr,
@@ -462,6 +472,7 @@ void *tx_process(void *arg)
 			continue;
 		switch(wif->wpkt.ptype) {
 		case TX_REC:
+			printf("Before Verify\n");
 			verified = txrec_verify(wm->sock, wif, txp);
 			if (verified == 1 && wm->pipd != -1) {
 				if (notify_tx_logging(wm->pipd) == -1)
@@ -568,6 +579,10 @@ int main(int argc, char *argv[])
 	pthread_t rcvthd;
 
 	global_param_init(NULL, 1, 0);
+	if (tok_block_init() != 0) {
+		logmsg(LOG_ERR, "Cannot Initialize Blockchain.\n");
+		exit(10);
+	}
 	wm = wcomm_init();
 	if (!wm) {
 		global_param_exit();

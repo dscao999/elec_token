@@ -31,7 +31,7 @@ edebug: etoken_debug.o tok_block.o toktx.o tokens.o global_param.o virtmach.o $(
 
 clean:
 	rm -f *.o
-	rm -f genblk toktx tx_service tx_logging
+	rm -f genblk toktx tx_service tx_logging ../lib/libtoktx.so
 
 release: all
 
@@ -39,5 +39,5 @@ release: CFLAGS += -O2
 
 release: LDFLAGS += -O1
 
-../lib/libtoktx.so: tokens.o toktx.o tok_block.o virtmach.o global_param.o $(eccobj)
+../lib/libtoktx.so: tokens.o toktx.o toktx_glob.o virtmach.o global_param.o $(eccobj)
 	$(LINK.o) -shared -Bsymblic $^ $(DBLIB) -lgmp -lasound -o $@

@@ -478,8 +478,13 @@ static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
 	int len;
 	unsigned char *lock;
 
-	if (txin->gensis != 0x0ff)
-		return tx_from_blockchain(txin, lock_len, val);
+	*lock_len = 0;
+	if (txin->gensis != 0x0ff) {
+		if (tx_from_blockchain)
+			return tx_from_blockchain(txin, lock_len, val);
+		else
+			return NULL;
+	}
 
 	*val = 0xfffffffffffffffful;
 	memcpy(ekey.px, txin->txid, SHA_DGST_LEN);
@@ -648,7 +653,6 @@ static void tx_tryerror(const struct txrec *tx)
 	char *buf;
 	struct txrec *mtx;
 	int len;
-	FILE *fh;
 
 	buf = malloc(2048);
 	len = tx_serialize(buf, 2048, tx, 0);
@@ -658,16 +662,10 @@ static void tx_tryerror(const struct txrec *tx)
 	tx_destroy(mtx);
 
 	len = tx_serialize(buf, 2048, tx, 1);
-	fh = fopen("/tmp/txrec-ser.dat", "wb");
-	fwrite(buf, 1, len, fh);
-	fclose(fh);
 	mtx = tx_deserialize(buf, len);
 	if (!mtx)
 		goto exit_10;
 	len = tx_serialize(buf, 2048, mtx, 1);
-	fh = fopen("/tmp/txrec-ser1.dat", "wb");
-	fwrite(buf, 1, len, fh);
-	fclose(fh);
 	tx_destroy(mtx);
 	
 exit_10:
