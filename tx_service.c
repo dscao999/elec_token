@@ -621,6 +621,7 @@ int main(int argc, char *argv[])
 	pthread_join(rcvthd, NULL);
 
 exit_10:
+	tok_block_exit();
 	global_param_exit();
 	wcomm_exit(wm);
 	return retv;

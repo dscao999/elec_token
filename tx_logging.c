@@ -49,8 +49,8 @@ static struct block_sql blkdb = {
 };
 
 struct utxo_sql {
-	MYSQL_STMT *insert, *update;
-	const char *insert_sql, *update_sql;
+	MYSQL_STMT *insert, *update, *del;
+	const char *insert_sql, *update_sql, *del_sql;
 	unsigned char txhash[SHA_DGST_LEN];
 	unsigned long owner_len, hash_len;
 	struct txrec_vout vout;
@@ -59,7 +59,8 @@ static struct utxo_sql utxodb = {
 	.insert_sql = "INSERT INTO utxo (keyhash, etoken_id, value, " \
 		       "vout_idx, blockid, txid) VALUES (?, ?, ?, " \
 		       "?, ?, ?)",
-	.update_sql = "UPDATE utxo SET blockid = ? WHERE blockid = 1"
+	.update_sql = "UPDATE utxo SET blockid = ? WHERE blockid = 1",
+	.del_sql = "DELETE FROM utxo WHERE in_process = 1"
 };
 
 struct dbcon {
@@ -149,6 +150,20 @@ static int dbcon_connect_utxodb(struct dbcon *db)
 		goto err_exit_10;
 	}
 
+	utxodb->del = mysql_stmt_init(db->mcon);
+	if (!check_pointer(utxodb->del)) {
+		retv = -ENOMEM;
+		goto err_exit_10;
+	}
+	if (mysql_stmt_prepare(utxodb->del, utxodb->del_sql,
+				strlen(utxodb->del_sql))) {
+		logmsg(LOG_ERR, "Prepare Statement failed, %s: %s\n",
+				utxodb->del_sql,
+				mysql_stmt_error(utxodb->del));
+		retv = -1;
+		goto err_exit_10;
+	}
+
 	return retv;
 
 err_exit_10:
@@ -165,6 +180,10 @@ static void dbcon_disconnect_utxodb(struct utxo_sql *utxodb)
 	if (utxodb->update) {
 		mysql_stmt_close(utxodb->update);
 		utxodb->update = NULL;
+	}
+	if (utxodb->del) {
+		mysql_stmt_close(utxodb->del);
+		utxodb->del = NULL;
 	}
 }
 
@@ -655,6 +674,12 @@ static int block_log(struct dbcon *db)
 		logmsg(LOG_ERR, "Cannot execute %s: %s\n", db->txdb->del_sql,
 				mysql_stmt_error(db->txdb->del));
 		retv = -mysql_stmt_errno(db->txdb->del);
+		goto err_exit_10;
+	}
+	if (mysql_stmt_execute(db->utxodb->del)) {
+		logmsg(LOG_ERR, "Cannot execute %s: %s\n", db->utxodb->del_sql,
+				mysql_stmt_error(db->utxodb->del));
+		retv = -mysql_stmt_errno(db->utxodb->del);
 		goto err_exit_10;
 	}
 
