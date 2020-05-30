@@ -9,7 +9,8 @@
 #define MAX_POINTER_MASK 0x3f
 #define MAX_TXSIZE 2048
 
-enum TX_TYPE {TX_REC = 1, UTXO_REQ = 2};
+enum TX_TYPE {TX_REC = 1, UTXO_REQ = 2, VEN_REQ = 3, TOKEN_CAT_REQ = 4,
+	TOKEN_ID_REQ = 5};
 
 struct wpacket {
 	unsigned int len;
