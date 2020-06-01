@@ -6,6 +6,7 @@
 #include <time.h>
 #include <my_global.h>
 #include <mysql.h>
+#include <assert.h>
 #include "tok_block.h"
 #include "ripemd160.h"
 #include "loglog.h"
@@ -221,10 +222,10 @@ struct txdb_con {
 	MYSQL *mcon;
 	MYSQL_STMT *utm, *btm;
 	const char *utxo_query, *blk_query;
-	unsigned char txid[SHA_DGST_LEN];
-	unsigned long txid_len;
+	unsigned char txid[SHA_DGST_LEN], hdr_hash[SHA_DGST_LEN];
+	unsigned long txid_len, hdrhash_len;
 	unsigned long blockid;
-	MYSQL_BIND pmbnd[2], rsbnd[1];
+	MYSQL_BIND pmbnd[2], rsbnd[2];
 	void *blkbuf;
 	unsigned long blklen;
 	unsigned char vout_idx;
@@ -233,7 +234,7 @@ struct txdb_con {
 struct txdb_con txcon = {
 	.utxo_query = "SELECT blockid FROM utxo WHERE txid = ? AND " \
 		       "vout_idx = ? AND in_process = 0",
-	.blk_query = "SELECT blockdata FROM blockchain WHERE blockid = ?"
+	.blk_query = "SELECT blockdata, hdr_hash FROM blockchain WHERE blockid = ?"
 };
 
 int txdb_con_init(struct txdb_con *txcon)
@@ -324,6 +325,10 @@ int txdb_con_init(struct txdb_con *txcon)
 	txcon->rsbnd[0].buffer = txcon->blkbuf;
 	txcon->rsbnd[0].buffer_length = MAX_BLKSIZE;
 	txcon->rsbnd[0].length = &txcon->blklen;
+	txcon->rsbnd[1].buffer_type = MYSQL_TYPE_BLOB;
+	txcon->rsbnd[1].buffer = txcon->hdr_hash;
+	txcon->rsbnd[1].buffer_length = SHA_DGST_LEN;
+	txcon->rsbnd[1].length = &txcon->hdrhash_len;
 	if (mysql_stmt_bind_result(txcon->btm, txcon->rsbnd)) {
 		logmsg(LOG_ERR, "SQL Statement bind result failed: %s->%s\n",
 				txcon->blk_query, mysql_stmt_error(txcon->btm));
@@ -352,13 +357,44 @@ static inline void txdb_con_exit(struct txdb_con *txcon)
 		mysql_close(txcon->mcon);
 }
 
+static int block_verify(struct txdb_con *blkdb)
+{
+	int retv = 0, i;
+	unsigned char hdrhash[SHA_DGST_LEN];
+	struct bl_header *hdr = (struct bl_header *)blkdb->blkbuf;
+	struct etk_block *blk = (struct etk_block *)blkdb->blkbuf;
+	unsigned char *txids, *cur_txid;
+	const struct txrec_area *txarea;
+
+	blhdr_hash(hdrhash, hdr);
+	assert(memcmp(hdrhash, txcon.hdr_hash, SHA_DGST_LEN) == 0);
+	assert(num_zerobits(hdrhash) >= g_param->mine.zbits);
+	txids = malloc(SHA_DGST_LEN*(hdr->numtxs+1));
+	if (!check_pointer(txids))
+		return retv;
+	cur_txid = txids;
+	txarea = blk->tx_area;
+	for (i = 0; i < hdr->numtxs; i++) {
+		memcpy(cur_txid, txarea->txhash, SHA_DGST_LEN);
+		txarea = ctxrec_area_next(txarea);
+		cur_txid += SHA_DGST_LEN;
+	}
+	sha256_dgst_2str(cur_txid, (const unsigned char *)txids,
+			hdr->numtxs*SHA_DGST_LEN);
+	assert(memcmp(cur_txid, hdr->mtree_root, SHA_DGST_LEN) == 0);
+
+	free(txids);
+	logmsg(LOG_INFO, "Block %lu verified.\n", blkdb->blockid);
+	return retv;
+}
+
 static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
 		int *lock_len, unsigned long *val)
 {
 	unsigned char *lock = NULL;
-	struct etk_block *blk;
-	struct bl_header *blkhdr;
-	struct txrec_area *txarea;
+	const struct etk_block *blk;
+	const struct bl_header *blkhdr;
+	const struct txrec_area *txarea;
 	struct txrec *tx;
 	int tx_idx, numret;
 	struct tx_etoken_out *vout;
@@ -398,8 +434,10 @@ static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
 		goto exit_10;
 	}
 	numret = 0;
-	while (mysql_stmt_fetch(txcon.btm) != MYSQL_NO_DATA)
+	while (mysql_stmt_fetch(txcon.btm) != MYSQL_NO_DATA) {
 		numret += 1;
+		assert(txcon.hdrhash_len == SHA_DGST_LEN);
+	}
 	mysql_stmt_free_result(txcon.btm);
 	assert(numret == 1);
 	if (txcon.blklen == 0) {
@@ -412,7 +450,7 @@ static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
 	tx_idx = 0;
 	while (memcmp(txarea->txhash, txin->txid, SHA_DGST_LEN) != 0 &&
 			tx_idx < blkhdr->numtxs) {
-		txarea = txrec_area_next(txarea);
+		txarea = ctxrec_area_next(txarea);
 		tx_idx += 1;
 	}
 	assert(tx_idx < blkhdr->numtxs);
@@ -427,6 +465,8 @@ static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
 	if (lock)
 		memcpy(lock, vout->lock, vout->lock_len);
 	tx_destroy(tx);
+
+	block_verify(&txcon);
 
 exit_10:
 	return lock;

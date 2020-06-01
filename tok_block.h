@@ -18,6 +18,12 @@ static inline struct txrec_area *txrec_area_next(struct txrec_area *tx)
 	return (struct txrec_area *)((void *)(tx + 1) + tx->txlen);
 }
 
+static inline
+const struct txrec_area *ctxrec_area_next(const struct txrec_area *tx)
+{
+	return (const struct txrec_area *)((void *)(tx + 1) + tx->txlen);
+}
+
 static inline void txrec_area_copy(struct txrec_area *dst, const struct txrec_area *src)
 {
 	memcpy(dst, src, src->txlen + sizeof(struct txrec_area));

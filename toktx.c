@@ -534,7 +534,7 @@ int tx_verify(const struct txrec *tx)
 		lock = tx_vin_getlock(txin, petk->token_id, &lock_len, &in_val);
 		if (!lock) {
 		       	if (vmach_success(vm))
-				suc = 1;
+				continue;
 			goto exit_20;
 		}
 		retv = vmach_execute(vm, lock, lock_len, buf, serlen);
