@@ -367,7 +367,7 @@ static int block_verify(struct txdb_con *blkdb)
 	const struct txrec_area *txarea;
 
 	blhdr_hash(hdrhash, hdr);
-	assert(memcmp(hdrhash, txcon.hdr_hash, SHA_DGST_LEN) == 0);
+	assert(memcmp(hdrhash, blkdb->hdr_hash, SHA_DGST_LEN) == 0);
 	assert(num_zerobits(hdrhash) >= g_param->mine.zbits);
 	txids = malloc(SHA_DGST_LEN*(hdr->numtxs+1));
 	if (!check_pointer(txids))
@@ -383,8 +383,29 @@ static int block_verify(struct txdb_con *blkdb)
 			hdr->numtxs*SHA_DGST_LEN);
 	assert(memcmp(cur_txid, hdr->mtree_root, SHA_DGST_LEN) == 0);
 
-	free(txids);
 	logmsg(LOG_INFO, "Block %lu verified.\n", blkdb->blockid);
+	memcpy(txids, hdr->prev_hash, SHA_DGST_LEN);
+	blkdb->blockid -= 1;
+	if (mysql_stmt_execute(blkdb->btm)) {
+		logmsg(LOG_ERR, "mysql_stmt_execute failed: %s->%s\n",
+				blkdb->blk_query,
+				mysql_stmt_error(blkdb->btm));
+		goto exit_10;
+	}
+	if (mysql_stmt_store_result(blkdb->btm)) {
+		logmsg(LOG_ERR, "mysql_stmt_store_result failed: %s->%s\n",
+				blkdb->blk_query,
+				mysql_stmt_error(blkdb->btm));
+		goto exit_10;
+	}
+	if (mysql_stmt_fetch(blkdb->btm) != 0)
+		logmsg(LOG_ERR, "No results from query: %s\n",
+				blkdb->blk_query);
+	mysql_stmt_free_result(blkdb->btm);
+	assert(memcmp(txids, blkdb->hdr_hash, SHA_DGST_LEN) == 0);
+	
+exit_10:
+	free(txids);
 	return retv;
 }
 
@@ -415,10 +436,8 @@ static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
 		goto exit_10;
 	}
 	numret = 0;
-	while (mysql_stmt_fetch(txcon.utm) != MYSQL_NO_DATA) {
+	while (mysql_stmt_fetch(txcon.utm) != MYSQL_NO_DATA)
 		numret += 1;
-		printf("Block ID: %lu\n", txcon.blockid);
-	}
 	mysql_stmt_free_result(txcon.utm);
 	if (numret == 0)
 		goto exit_10;
