@@ -57,8 +57,8 @@ struct utxo_sql {
 };
 static struct utxo_sql utxodb = {
 	.insert_sql = "INSERT INTO utxo (keyhash, etoken_id, value, " \
-		       "vout_idx, blockid, txid) VALUES (?, ?, ?, " \
-		       "?, ?, ?)",
+		       "vout_idx, txid) VALUES (?, ?, ?, " \
+		       "?, ?)",
 	.update_sql = "UPDATE utxo SET blockid = ? WHERE blockid = 1",
 	.del_sql = "DELETE FROM utxo WHERE in_process = 1"
 };
@@ -110,13 +110,10 @@ static int dbcon_connect_utxodb(struct dbcon *db)
 	db->pmbind[3].buffer_type = MYSQL_TYPE_TINY;
 	db->pmbind[3].buffer = &utxodb->vout.vout_idx;
 	db->pmbind[3].is_unsigned = 1;
-	db->pmbind[4].buffer_type = MYSQL_TYPE_LONGLONG;
-	db->pmbind[4].buffer = &utxodb->vout.blockid;
-	db->pmbind[4].is_unsigned = 1;
-	db->pmbind[5].buffer_type = MYSQL_TYPE_BLOB;
-	db->pmbind[5].buffer = utxodb->txhash;
-	db->pmbind[5].buffer_length = SHA_DGST_LEN;
-	db->pmbind[5].length = &utxodb->hash_len;
+	db->pmbind[4].buffer_type = MYSQL_TYPE_BLOB;
+	db->pmbind[4].buffer = utxodb->txhash;
+	db->pmbind[4].buffer_length = SHA_DGST_LEN;
+	db->pmbind[4].length = &utxodb->hash_len;
 	if (mysql_stmt_bind_param(utxodb->insert, db->pmbind)) {
 		logmsg(LOG_ERR, "Param Bind failed: %s, %s\n",
 				utxodb->insert_sql,
@@ -592,7 +589,7 @@ static int txrec_pack(struct dbcon *db)
 		}
 		memcpy(utxodb->txhash, txdb->txbuf->txhash, SHA_DGST_LEN);
 		utxodb->vout.vout_idx = 0;
-		while (tx_get_vout(tx, &utxodb->vout, 1) == 1) {
+		while (tx_get_vout(tx, &utxodb->vout) == 1) {
 			if (mysql_stmt_execute(utxodb->insert))
 				logmsg(LOG_ERR, "Cannot insert UTXO %s: %s\n",
 						utxodb->insert_sql,

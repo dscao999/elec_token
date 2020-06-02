@@ -575,26 +575,19 @@ static void tx_get_vout_owner(unsigned char *owner, const unsigned char *lock,
 		memset(owner, 0, RIPEMD_LEN);
 }
 
-int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo,
-		unsigned long blkid)
+int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo)
 {
 	const struct tx_etoken_out *vout;
-	char ripe_str[32];
-	int len;
 
 	if (vo->vout_idx >= tx->vout_num)
 		return 0;
 	vout = *(tx->vouts + vo->vout_idx);
 	vo->eid = vout->etk.token_id;
 	vo->value = vout->etk.value;
-	vo->blockid = blkid;
 	if (vout->lock_len == 0)
 		memset(vo->owner, 0, RIPEMD_LEN);
-	else {
+	else
 		tx_get_vout_owner(vo->owner, vout->lock, vout->lock_len);
-		len = bin2str_b64(ripe_str, sizeof(ripe_str), vo->owner, RIPEMD_LEN);
-		ripe_str[len] = 0;
-	}
 
 	return 1;
 }

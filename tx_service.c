@@ -1003,8 +1003,8 @@ int main(int argc, char *argv[])
 	pthread_join(rcvthd, NULL);
 
 exit_10:
+	wcomm_exit(wm);
 	tok_block_exit();
 	global_param_exit();
-	wcomm_exit(wm);
 	return retv;
 }
