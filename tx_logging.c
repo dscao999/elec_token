@@ -885,6 +885,10 @@ int main(int argc, char *argv[])
 				dbinfo->blkdb->blk_hash);
 		logmsg(LOG_INFO, "Mined in %d milliseconds, leading zero bits: %d\n",
 				elapsed, zerobits);
+		if (zerobits < g_param->mine.zbits) {
+			logmsg(LOG_INFO, "Our mining was aborted.\n");
+			continue;
+		}
 		logmsg(LOG_INFO, "SHA256: ");
 		for (i = 0; i < SHA_DGST_LEN; i++)
 			logmsg(LOG_INFO, "%02X ", dbinfo->blkdb->blk_hash[i]);

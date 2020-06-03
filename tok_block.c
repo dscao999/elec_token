@@ -126,7 +126,7 @@ int block_mining(struct bl_header *hdr, volatile int *fin)
 	*hdrs[0] = *hdr;
 	*hdrs[1] = *hdr;
 	thargs[0].hdr = hdrs[0];
-	thargs[0].up = 1;
+	thargs[0].up = -1;
 	thargs[0].zbits = zbits;
 	thargs[0].fin = fin;
 	thargs[0].th_flag = 0;
