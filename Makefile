@@ -12,8 +12,8 @@ all: genblk toktx ../lib/libtoktx.so tx_service tx_logging edebug
 
 eccobj = ecc_secp256k1.o sha256.o dscrc.o base64.o dsaes.o ripemd160.o alsarec.o
 
-genblk: genblock.o tok_block.o global_param.o $(eccobj)
-	$(LINK.o) -pthread $^ -lgmp -lasound -o $@
+genblk: genblock.o tok_block.o global_param.o toktx.o tokens.o virtmach.o $(eccobj)
+	$(LINK.o) -pthread $^ -lmariadbclient -lgmp -lasound -o $@
 
 toktx: txtokens.o toktx.o tokens.o virtmach.o global_param.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
@@ -41,3 +41,11 @@ release: LDFLAGS += -O1
 
 ../lib/libtoktx.so: tokens.o toktx.o toktx_glob.o virtmach.o global_param.o $(eccobj)
 	$(LINK.o) -shared -Bsymblic $^ $(DBLIB) -lgmp -lasound -o $@
+
+%.o: %.c
+	$(COMPILE.c) -MMD -MP -c $< -o $@
+
+srcs = $(wildcard *.c)
+deps = $(srcs:.c=.d)
+
+-include $(deps)
