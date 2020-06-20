@@ -32,11 +32,11 @@ int etoken_option_deserialize(const char *buf, int buflen,
 		struct etoken *cet);
 int etoken_expired(const struct etoken *et);
 
-void etoken_init(struct etoken *et, int token, unsigned long value, int days);
+void etoken_init(struct etoken *et, int token, ulong64 value, int days);
 int etoken_clone(struct etoken *et, const struct etoken *cet,
-		unsigned long value);
+		ulong64 value);
 
-struct etoken *etoken_new(int token, unsigned long value, int days);
+struct etoken *etoken_new(int token, ulong64 value, int days);
 
 static inline int etoken_equiv(const struct etoken *l, const struct etoken *r)
 {

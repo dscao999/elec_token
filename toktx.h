@@ -8,8 +8,8 @@
 #define MAX_TXSIZE 2048
 
 struct txrec_vout {
-	unsigned long value;
-	unsigned long blockid;
+	ulong64 value;
+	ulong64 blockid;
 	unsigned char owner[RIPEMD_LEN];
 	unsigned short eid;
 	unsigned char vout_idx;
@@ -44,14 +44,14 @@ struct txrec {
 	struct tx_etoken_out **vouts;
 };
 
-struct txrec *tx_create(int tkid, unsigned long value, int days,
+struct txrec *tx_create(int tkid, ulong64 value, int days,
 		const char *payto, const struct ecc_key *ecckey);
 int tx_serialize(char *buf, int len, const struct txrec *tx, int with_unlock);
 struct txrec *tx_deserialize(const char *buf, int len);
 
 void tx_destroy(struct txrec *tx);
 
-int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
+int tx_create_token(char *buf, int buflen, int tkid, ulong64 value,
 		int days, const char *payto, const struct ecc_key *ecckey);
 
 int tx_verify(const struct txrec *tx);
@@ -59,6 +59,6 @@ int tx_verify(const struct txrec *tx);
 int tx_get_vout(const struct txrec *tx, struct txrec_vout *vout);
 
 extern unsigned char * (*tx_from_blockchain)(const struct tx_etoken_in *txin,
-		int *lock_len, unsigned long *val);
+		int *lock_len, ulong64 *val);
 
 #endif /* TOKTX_DSCAO__ */

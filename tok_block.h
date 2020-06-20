@@ -8,7 +8,7 @@
 #define MAX_BLKSIZE	(128*1024)
 
 struct txrec_area {
-	unsigned long txlen;
+	ulong64 txlen;
 	unsigned char txhash[SHA_DGST_LEN];
 	unsigned char txbuf[0];
 };
@@ -36,14 +36,14 @@ struct bl_header {
 	unsigned short numtxs;
 	unsigned char prev_hash[SHA_DGST_LEN];
 	unsigned char mtree_root[SHA_DGST_LEN];
-	unsigned long tm;
-	unsigned long nonce;
+	ulong64 tm;
+	ulong64 nonce;
 	struct ecc_sig nodsig;
 };
 
 struct etk_block {
 	struct bl_header hdr;
-	unsigned long area_len;
+	ulong64 area_len;
 	struct txrec_area tx_area[0];
 };
 

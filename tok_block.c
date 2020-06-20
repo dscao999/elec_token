@@ -20,10 +20,10 @@ static const unsigned char gensis[] = "Startup of Electronic Token " \
 				      "Blockchain. All started from Oct 2019 with Dashi Cao.";
 
 unsigned char * (*tx_from_blockchain)(const struct tx_etoken_in *txin,
-		int *lock_len, unsigned long *val) = NULL;
+		int *lock_len, ulong64 *val) = NULL;
 
 static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
-		int *lock_len, unsigned long *val);
+		int *lock_len, ulong64 *val);
 
 static int num_zerobits(const unsigned char *hash)
 {
@@ -79,7 +79,7 @@ static void *nonce_search(void *arg)
 	unsigned char dgst[SHA_DGST_LEN];
 	struct th_arg *tharg = arg;
 	int zerobits = 0;
-	unsigned long nonce = tharg->hdr->nonce;
+	ulong64 nonce = tharg->hdr->nonce;
 
 	assert(tharg->up == -1 || tharg->up == 1);
 	do {
@@ -223,11 +223,11 @@ struct txdb_con {
 	MYSQL_STMT *utm, *btm;
 	const char *utxo_query, *blk_query;
 	unsigned char txid[SHA_DGST_LEN], hdr_hash[SHA_DGST_LEN];
-	unsigned long txid_len, hdrhash_len;
-	unsigned long blockid;
+	ulong64 txid_len, hdrhash_len;
+	ulong64 blockid;
 	MYSQL_BIND pmbnd[2], rsbnd[2];
 	void *blkbuf;
-	unsigned long blklen;
+	ulong64 blklen;
 	unsigned char vout_idx;
 };
 
@@ -410,7 +410,7 @@ exit_10:
 }
 
 static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
-		int *lock_len, unsigned long *val)
+		int *lock_len, ulong64 *val)
 {
 	unsigned char *lock = NULL;
 	const struct etk_block *blk;

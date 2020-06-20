@@ -14,7 +14,7 @@
 #define TOKEN_TX_VER	0x01
 #define SCRATCH_LEN	4096
 
-void tx_trans_abort(unsigned long txptr)
+void tx_trans_abort(ulong64 txptr)
 {
 	struct txrec *tx;
 
@@ -85,7 +85,7 @@ static int tx_sign(char *buf, int buflen, const struct txrec *tx, int vin_idx,
 	return 0;
 }
 
-struct txrec *tx_create(int tkid, unsigned long value, int days,
+struct txrec *tx_create(int tkid, ulong64 value, int days,
 		const char *payto, const struct ecc_key *ecckey)
 {
 	int buflen, retv;
@@ -352,7 +352,7 @@ err_exit_10:
 	return NULL;
 }
 
-int tx_create_token(char *buf, int buflen, int tkid, unsigned long value,
+int tx_create_token(char *buf, int buflen, int tkid, ulong64 value,
 		int days, const char *payto, const struct ecc_key *ecckey)
 {
 	int txlen;
@@ -376,7 +376,7 @@ static unsigned char *tx_sales_query(const char *khash, int eid, int *lock_len)
 	MYSQL_STMT *mstmt;
 	MYSQL_BIND pbind[2], rbind[1];
 	unsigned short etok_id = eid;
-	unsigned long blob_len, khash_len;
+	ulong64 blob_len, khash_len;
 	int lsize;
 
 	qsize = 1024;
@@ -471,7 +471,7 @@ err_exit_10:
 }
 
 static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
-		int *lock_len, unsigned long *val)
+		int *lock_len, ulong64 *val)
 {
 	struct ecc_key ekey;
 	char khash[32];
@@ -502,7 +502,7 @@ int tx_verify(const struct txrec *tx)
 	const struct tx_etoken_out *txout, **txouts;
 	const struct etoken *petk;
 	unsigned char *lock = NULL, *buf;
-	unsigned long out_val = 0, in_val = 0;
+	ulong64 out_val = 0, in_val = 0;
 	struct vmach *vm;
 	void *scratch;
 
@@ -608,7 +608,7 @@ static int tx_vout_set_lock(struct tx_etoken_out *vout, const unsigned char *pay
 }
 
 static int tx_vout_set(struct tx_etoken_out *vout, int tokid,
-		unsigned long value, const unsigned char *payto)
+		ulong64 value, const unsigned char *payto)
 {
 	int retv;
 
@@ -620,7 +620,7 @@ static int tx_vout_set(struct tx_etoken_out *vout, int tokid,
 }
 
 static int tx_vout_copy(struct tx_etoken_out *vout, const struct etoken *cet,
-		unsigned long value, const unsigned char *payto)
+		ulong64 value, const unsigned char *payto)
 {
 	int retv;
 
@@ -666,7 +666,7 @@ exit_10:
 }
 
 int tx_trans_begin(struct txrec **ptr, unsigned int tokid,
-		unsigned long value, const unsigned char *payto)
+		ulong64 value, const unsigned char *payto)
 {
 	int retv = 0;
 	struct txrec *txptr;
@@ -711,7 +711,7 @@ err_exit_10:
 	return retv;
 }
 
-int tx_trans_add(unsigned long txptr, unsigned char *txid, int vout_idx)
+int tx_trans_add(ulong64 txptr, unsigned char *txid, int vout_idx)
 {
 	int retv = 0, i;
 	struct tx_etoken_in *vin, **vins, **p_vins, **c_vins;
@@ -747,7 +747,7 @@ err_exit_10:
 	return retv;
 }
 
-int tx_trans_sup(unsigned long txptr, unsigned long value,
+int tx_trans_sup(ulong64 txptr, ulong64 value,
 		const unsigned char *payto)
 {
 	int retv = 0, i;
@@ -791,7 +791,7 @@ err_exit_10:
 	return retv;
 }
 
-int tx_trans_sign(unsigned long txptr, unsigned char *buf, int buflen, 
+int tx_trans_sign(ulong64 txptr, unsigned char *buf, int buflen, 
 		const struct ecc_key *skey, int idx)
 {
 	struct txrec *tx = (struct txrec *)txptr;
@@ -806,7 +806,7 @@ int tx_trans_sign(unsigned long txptr, unsigned char *buf, int buflen,
 	return retv;
 }
 
-int tx_trans_end(char *buf, int buflen, unsigned long txptr)
+int tx_trans_end(char *buf, int buflen, ulong64 txptr)
 {
 	struct txrec *tx = (struct txrec *)txptr;
 	int len;

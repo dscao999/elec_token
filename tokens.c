@@ -30,7 +30,7 @@ int etoken_expired(const struct etoken *et)
 	return 0;
 }
 
-struct etoken *etoken_new(int token, unsigned long value, int days)
+struct etoken *etoken_new(int token, ulong64 value, int days)
 {
 	struct etoken *et;
 
@@ -41,7 +41,7 @@ struct etoken *etoken_new(int token, unsigned long value, int days)
 	return et;
 }
 
-void etoken_init(struct etoken *et, int token, unsigned long value, int days)
+void etoken_init(struct etoken *et, int token, ulong64 value, int days)
 {
 	struct timespec tm;
 
@@ -56,7 +56,7 @@ void etoken_init(struct etoken *et, int token, unsigned long value, int days)
 }
 
 int etoken_clone(struct etoken *et, const struct etoken *cet,
-		unsigned long value)
+		ulong64 value)
 {
 	const struct etk_option *etkopt;
 	struct etk_option *prev, *nopt;

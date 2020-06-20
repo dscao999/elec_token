@@ -31,17 +31,17 @@ static void mysig_handler(int sig)
 }
 
 struct hashtx_info {
-	unsigned long sha_len;
+	ulong64 sha_len;
 	unsigned char sha_dgst[SHA_DGST_LEN];
 	union {
-		unsigned long txrec_len;
+		ulong64 txrec_len;
 		unsigned int txseq;
 		unsigned char vout_idx;
 	};
 };
 
 struct hashkey_query {
-	unsigned long value, ripe_len, sha_len;
+	ulong64 value, ripe_len, sha_len;
 	unsigned char txid[SHA_DGST_LEN];
 	unsigned char keyhash[RIPEMD_LEN];
 	unsigned short etoken_id;
@@ -51,7 +51,7 @@ struct hashkey_query {
 struct tokid_query {
 	MYSQL_STMT *vmt, *catmt, *tokmt;
 	const char *vendor_query, *cat_query, *tok_query;
-	unsigned long name_len, descp_len;
+	ulong64 name_len, descp_len;
 	unsigned short vid, catid, tokid;
 	char name[16], descp[128];
 };

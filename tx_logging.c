@@ -25,7 +25,7 @@ struct txrec_sql {
 	MYSQL_STMT *query, *update, *del;
 	const char *query_sql, *update_sql, *del_sql;
 	struct txrec_area *txbuf;
-	unsigned long hash_len;
+	ulong64 hash_len;
 	unsigned int seq;
 };
 static struct txrec_sql txdb = {
@@ -39,7 +39,7 @@ struct block_sql {
 	MYSQL_STMT *lastid, *last, *insert;
 	const char *lastid_sql, *last_sql, *insert_sql;
 	struct etk_block *block;
-	unsigned long blkid, blklen, hash_len;
+	ulong64 blkid, blklen, hash_len;
 	unsigned char blk_hash[SHA_DGST_LEN];
 };
 static struct block_sql blkdb = {
@@ -52,7 +52,7 @@ struct utxo_sql {
 	MYSQL_STMT *insert, *update, *del;
 	const char *insert_sql, *update_sql, *del_sql;
 	unsigned char txhash[SHA_DGST_LEN];
-	unsigned long owner_len, hash_len;
+	ulong64 owner_len, hash_len;
 	struct txrec_vout vout;
 };
 static struct utxo_sql utxodb = {
@@ -483,7 +483,7 @@ static struct dbcon *dbcon_init(void)
 	return dbinfo;
 }
 
-static unsigned long blk_get_lastid(struct dbcon *db)
+static ulong64 blk_get_lastid(struct dbcon *db)
 {
 	int mysql_retv;
 

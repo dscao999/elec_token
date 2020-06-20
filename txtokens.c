@@ -8,12 +8,16 @@
 #include "toktx.h"
 #include "alsarec.h"
 
+unsigned char *(*tx_from_blockchain)(const struct tx_etoken_in *txin,
+		int *lock_len, ulong64 *val) = NULL;
+
 void save_tx(const char *fname, const struct txrec *tx);
 struct txrec *tx_read(const char *fname);
 
 int main(int argc, char *argv[])
 {
 	const char *payto, *prkey, *fname, *ofname;
+	struct ecc_key ekey;
 	struct txrec *tx;
 	int verify = 0;
 	int mark, fin, value, token, import = 0;
@@ -80,7 +84,11 @@ int main(int argc, char *argv[])
 		token = 40033;
 
 	if (import == 0) {
-		tx = tx_create(token, value, 0, payto, prkey);
+		if (ecc_key_import(&ekey, prkey) != 0) {
+			logmsg(LOG_ERR, "Key impport failed\n");
+			return 3;
+		}
+		tx = tx_create(token, value, 0, payto, &ekey);
 		if (tx == NULL) {
 			logmsg(LOG_ERR, "Token Creation failed.\n");
 			return 2;

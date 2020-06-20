@@ -8,7 +8,7 @@ int main(int argc, char *argv[])
 	int retv = 0, suc;
 	const char *fname;
 	FILE *fin;
-	unsigned long fsize;
+	ulong64 fsize;
 	char *buf;
 	struct txrec *tx;
 
