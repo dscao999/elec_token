@@ -780,7 +780,9 @@ static int wait_for_txs(int pipd)
 		nanosleep(&intvl, NULL);
 	} while (numb == -1 && errno == EAGAIN && global_exit == 0);
 	if (numb == -1 && errno != EAGAIN) {
-		logmsg(LOG_ERR, "Read pipe failed: %s\n", strerror(errno));
+		if (errno != EINTR)
+			logmsg(LOG_ERR, "Read pipe failed: %s\n",
+					strerror(errno));
 		return numb;
 	}
 	txs += 1;
@@ -798,7 +800,9 @@ static int wait_for_txs(int pipd)
 		secs += 1;
 	} while (txs < 10);
 	if (numb == -1 && errno != EAGAIN) {
-		logmsg(LOG_ERR, "Read pipe failed: %s\n", strerror(errno));
+		if (errno != EINTR)
+			logmsg(LOG_ERR, "Read pipe failed: %s\n",
+					strerror(errno));
 		return numb;
 	}
 
@@ -869,7 +873,7 @@ int main(int argc, char *argv[])
 				 if (pipd == -1)
 					 global_exit = 1;
 			 }
-		} else if (retv == -1) {
+		} else if (retv == -1 && errno != EINTR) {
 			global_exit = 1;
 			logmsg(LOG_ERR, "wait_for_tx failed.\n");
 		}
