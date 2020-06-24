@@ -10,24 +10,25 @@ VPATH = ../ecc256
 
 all: genblk toktx ../lib/libtoktx.so tx_service tx_logging edebug
 
-eccobj = ecc_secp256k1.o sha256.o dscrc.o base64.o dsaes.o ripemd160.o alsarec.o
+eccobj = ecc_secp256k1.o sha256.o dscrc.o base64.o dsaes.o ripemd160.o rand32bytes.o
 
 genblk: genblock.o tok_block.o global_param.o toktx.o tokens.o virtmach.o $(eccobj)
-	$(LINK.o) -pthread $^ -lmariadbclient -lgmp -lasound -o $@
+	$(LINK.o) -pthread $^ -lmariadbclient -lgmp -o $@
 
-toktx: txtokens.o toktx.o tokens.o virtmach.o global_param.o $(eccobj)
-	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
+toktx: txtokens.o toktx.o tokens.o toktx_svr.o virtmach.o global_param.o $(eccobj)
+	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 
 tx_service: tx_service.o toktx.o tokens.o virtmach.o tok_block.o global_param.o \
-	wcomm.o $(eccobj)
-	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
+	wcomm.o toktx_svr.o $(eccobj)
+	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 
 tx_logging: tx_logging.o tok_block.o toktx.o global_param.o virtmach.o \
-	tokens.o $(eccobj)
-	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
+	tokens.o toktx_svr.o $(eccobj)
+	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 
-edebug: etoken_debug.o tok_block.o toktx.o tokens.o global_param.o virtmach.o $(eccobj)
-	$(LINK.o) $^ $(DBLIB) -lasound -lgmp -o $@
+edebug: etoken_debug.o tok_block.o toktx.o tokens.o toktx_svr.o global_param.o \
+	virtmach.o $(eccobj)
+	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 
 clean:
 	rm -f *.o
@@ -39,8 +40,10 @@ release: CFLAGS += -O2
 
 release: LDFLAGS += -O1
 
-../lib/libtoktx.so: tokens.o toktx.o toktx_glob.o virtmach.o global_param.o $(eccobj)
-	$(LINK.o) -shared -Bsymblic $^ $(DBLIB) -lgmp -lasound -o $@
+../lib/libtoktx.so: tokens.o toktx.o $(eccobj)
+	$(LINK.o) -shared $^ -lgmp -o $@
+
+../lib/libtoktx.so: CFLAGS += -DPYTHON_LIB
 
 %.o: %.c
 	$(COMPILE.c) -MMD -MP -c $< -o $@

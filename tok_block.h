@@ -3,7 +3,7 @@
 #include <string.h>
 #include "sha256.h"
 #include "ecc_secp256k1.h"
-#include "toktx.h"
+#include "toktx_svr.h"
 
 #define MAX_BLKSIZE	(128*1024)
 

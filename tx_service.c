@@ -960,7 +960,7 @@ int main(int argc, char *argv[])
 	struct sigaction sigact;
 	pthread_t rcvthd;
 
-	global_param_init(NULL, 1, 0);
+	global_param_init(NULL);
 	if (tok_block_init() != 0) {
 		logmsg(LOG_ERR, "Cannot Initialize Blockchain.\n");
 		exit(10);

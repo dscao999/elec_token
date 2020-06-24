@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <assert.h>
-#include "toktx.h"
+#include "toktx_svr.h"
 #include "global_param.h"
 
 int main(int argc, char *argv[])
@@ -24,7 +24,7 @@ int main(int argc, char *argv[])
 	retv = fread(buf, 1, fsize, fin);
 	assert(retv == fsize);
 	fclose(fin);
-	global_param_init(NULL, 1, 0);
+	global_param_init(NULL);
 
 	tx = tx_deserialize(buf, fsize);
 	printf("TX vins: %d, vouts: %d\n", tx->vin_num, tx->vout_num);

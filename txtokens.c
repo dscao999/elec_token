@@ -5,7 +5,7 @@
 #include "global_param.h"
 #include "loglog.h"
 #include "ecc_secp256k1.h"
-#include "toktx.h"
+#include "toktx_svr.h"
 #include "alsarec.h"
 
 unsigned char *(*tx_from_blockchain)(const struct tx_etoken_in *txin,
@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
 			assert(0);
 		}
 	} while (fin == 0);
-	global_param_init(NULL, 1, 1);
+	global_param_init(NULL);
 	if ((!payto || !prkey) && import == 0) {
 		logmsg(LOG_ERR, "no key, or no receipient!\n");
 		return 1;

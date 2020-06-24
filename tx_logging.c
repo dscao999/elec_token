@@ -819,7 +819,7 @@ int main(int argc, char *argv[])
 	pid_t tx_svc_pid;
 	struct timespec intvl;
 
-	global_param_init(NULL, 0, 0);
+	global_param_init(NULL);
 	if (tok_block_init())
 		exit(10);
 	dbinfo = dbcon_init();

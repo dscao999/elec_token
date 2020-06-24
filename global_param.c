@@ -29,21 +29,13 @@ static struct global_param all_param = {
 
 const struct global_param *g_param;
 
-void global_param_init(const char *cnf, int ecc, int alsa)
+void global_param_init(const char *cnf)
 {
 	g_param = &all_param;
-	if (ecc)
-		ecc_init();
-	if (alsa)
-		alsa_init(NULL);
-	all_param.ecc = ecc;
-	all_param.alsa = alsa;
+	ecc_init();
 }
 
 void global_param_exit(void)
 {
-	if (g_param->ecc)
-		ecc_exit();
-	if (g_param->alsa)
-		alsa_exit();
+	ecc_exit();
 }

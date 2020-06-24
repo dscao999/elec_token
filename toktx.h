@@ -54,11 +54,4 @@ void tx_destroy(struct txrec *tx);
 int tx_create_token(char *buf, int buflen, int tkid, ulong64 value,
 		int days, const char *payto, const struct ecc_key *ecckey);
 
-int tx_verify(const struct txrec *tx);
-
-int tx_get_vout(const struct txrec *tx, struct txrec_vout *vout);
-
-extern unsigned char * (*tx_from_blockchain)(const struct tx_etoken_in *txin,
-		int *lock_len, ulong64 *val);
-
 #endif /* TOKTX_DSCAO__ */

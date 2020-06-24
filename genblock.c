@@ -14,7 +14,7 @@ int main(int argc, char *argv[])
 	unsigned char sha_dgst[SHA_DGST_LEN];
 	FILE *fh;
 
-	global_param_init(NULL, 1, 0);
+	global_param_init(NULL);
 	blklen = gensis_block(blkbuf, K32B);
 	printf("Gensis block mined, length: %d\n", blklen);
 	hdr = (struct bl_header *)blkbuf;
