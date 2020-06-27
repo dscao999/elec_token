@@ -3,10 +3,17 @@
 #include <stdlib.h>
 #include "loglog.h"
 
+#if defined(__linux__)
 #define BYTE unsigned char
 #define HALFW unsigned short
 #define WORD unsigned int
 #define LONGW unsigned long
+#elif defined(_WIN64)
+#define BYTE unsigned char
+#define HALFW unsigned short
+#define WORD unsigned int
+#define LONGW unsigned long long
+#endif
 
 enum OPTION {
 	TKSER = 0x01, ENDUSER = 0x10, ENDOPT = 0xff

@@ -51,7 +51,7 @@ struct txrec *tx_deserialize(const char *buf, int len);
 
 void tx_destroy(struct txrec *tx);
 
-int tx_create_token(char *buf, int buflen, int tkid, ulong64 value,
+__declspec(dllexport) int __cdecl tx_create_token(char *buf, int buflen, int tkid, ulong64 value,
 		int days, const char *payto, const struct ecc_key *ecckey);
 
 #endif /* TOKTX_DSCAO__ */

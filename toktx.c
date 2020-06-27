@@ -5,7 +5,7 @@
 #include "loglog.h"
 #include "tokens.h"
 #include "toktx.h"
-#include "virtmach.h"
+#include "virtmach_code.h"
 #include "base64.h"
 
 #define TOKEN_TX_VER	0x01
@@ -239,7 +239,7 @@ int tx_serialize(char *buf, int buflen, const struct txrec *tx, int with_unlock)
 		((struct tx_etoken_out *)txout_ser)->etk.options = NULL;
 		pos = sizeof(struct tx_etoken_out);
 		rlen = etoken_option_serialize(txout_ser+pos,
-				buflen - (txout_ser - buf), &txout->etk);
+				buflen - (int)(txout_ser - buf), &txout->etk);
 		pos += rlen;
 		if (txout->lock)
 			memcpy(txout_ser+pos, txout->lock, txout->lock_len);

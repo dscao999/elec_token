@@ -25,7 +25,7 @@ int etoken_expired(const struct etoken *et)
 	struct timespec tm;
 
 	clock_gettime(CLOCK_REALTIME, &tm);
-	if (et->expire < tm.tv_sec)
+	if (et->expire < (ulong64)tm.tv_sec)
 		return 1;
 	return 0;
 }
