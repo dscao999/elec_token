@@ -11,7 +11,7 @@ struct txrec_vout {
 	ulong64 value;
 	ulong64 blockid;
 	unsigned char owner[RIPEMD_LEN];
-	unsigned short eid;
+	unsigned int eid;
 	unsigned char vout_idx;
 };
 

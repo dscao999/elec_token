@@ -101,7 +101,7 @@ static int dbcon_connect_utxodb(struct dbcon *db)
 	db->pmbind[0].buffer = utxodb->vout.owner;
 	db->pmbind[0].buffer_length = RIPEMD_LEN;
 	db->pmbind[0].length = &utxodb->owner_len;
-	db->pmbind[1].buffer_type = MYSQL_TYPE_SHORT;
+	db->pmbind[1].buffer_type = MYSQL_TYPE_LONG;
 	db->pmbind[1].buffer = &utxodb->vout.eid;
 	db->pmbind[1].is_unsigned = 1;
 	db->pmbind[2].buffer_type = MYSQL_TYPE_LONGLONG;

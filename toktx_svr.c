@@ -15,7 +15,7 @@ static unsigned char *tx_sales_query(const char *khash, int eid, int *lock_len)
 	MYSQL *mcon;
 	MYSQL_STMT *mstmt;
 	MYSQL_BIND pbind[2], rbind[1];
-	unsigned short etok_id = eid;
+	unsigned int etok_id = eid;
 	ulong64 blob_len, khash_len;
 	int lsize;
 
@@ -50,7 +50,7 @@ static unsigned char *tx_sales_query(const char *khash, int eid, int *lock_len)
 	pbind[0].buffer = pkhash;
 	pbind[0].buffer_length = khash_len;
 	pbind[0].length = &khash_len;
-	pbind[1].buffer_type = MYSQL_TYPE_SHORT;
+	pbind[1].buffer_type = MYSQL_TYPE_LONG;
 	pbind[1].buffer = &etok_id;
 	pbind[1].is_unsigned = 1;
 	mysql_retv = mysql_stmt_bind_param(mstmt, pbind);

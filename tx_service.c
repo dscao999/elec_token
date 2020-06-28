@@ -44,7 +44,7 @@ struct hashkey_query {
 	ulong64 value, ripe_len, sha_len;
 	unsigned char txid[SHA_DGST_LEN];
 	unsigned char keyhash[RIPEMD_LEN];
-	unsigned short etoken_id;
+	unsigned int etoken_id;
 	unsigned char vout_idx;
 };
 
@@ -52,7 +52,7 @@ struct tokid_query {
 	MYSQL_STMT *vmt, *catmt, *tokmt;
 	const char *vendor_query, *cat_query, *tok_query;
 	ulong64 name_len, descp_len;
-	unsigned short vid, catid, tokid;
+	unsigned int vid, catid, tokid;
 	char name[16], descp[128];
 };
 
@@ -109,7 +109,7 @@ static int tokid_query_init(struct txrec_info *txp)
 		goto err_exit_10;
 	}
 	memset(txp->rbnd, 0, 3*sizeof(MYSQL_BIND));
-	txp->rbnd[0].buffer_type = MYSQL_TYPE_SHORT;
+	txp->rbnd[0].buffer_type = MYSQL_TYPE_LONG;
 	txp->rbnd[0].buffer = &tokq->vid;
 	txp->rbnd[0].is_unsigned = 1;
 	txp->rbnd[1].buffer_type = MYSQL_TYPE_STRING;
@@ -142,7 +142,7 @@ static int tokid_query_init(struct txrec_info *txp)
 		goto err_exit_10;
 	}
 	memset(txp->mbnd, 0, sizeof(MYSQL_BIND));
-	txp->mbnd[0].buffer_type = MYSQL_TYPE_SHORT;
+	txp->mbnd[0].buffer_type = MYSQL_TYPE_LONG;
 	txp->mbnd[0].buffer = &tokq->vid;
 	txp->mbnd[0].is_unsigned = 1;
 	if (mysql_stmt_bind_param(tokq->catmt, txp->mbnd)) {
@@ -152,7 +152,7 @@ static int tokid_query_init(struct txrec_info *txp)
 		goto err_exit_10;
 	}
 	memset(txp->rbnd, 0, 3*sizeof(MYSQL_BIND));
-	txp->rbnd[0].buffer_type = MYSQL_TYPE_SHORT;
+	txp->rbnd[0].buffer_type = MYSQL_TYPE_LONG;
 	txp->rbnd[0].buffer = &tokq->catid;
 	txp->rbnd[0].is_unsigned = 1;
 	txp->rbnd[1].buffer_type = MYSQL_TYPE_STRING;
@@ -184,7 +184,7 @@ static int tokid_query_init(struct txrec_info *txp)
 		goto err_exit_10;
 	}
 	memset(txp->mbnd, 0, sizeof(MYSQL_BIND));
-	txp->mbnd[0].buffer_type = MYSQL_TYPE_SHORT;
+	txp->mbnd[0].buffer_type = MYSQL_TYPE_LONG;
 	txp->mbnd[0].buffer = &tokq->catid;
 	txp->mbnd[0].is_unsigned = 1;
 	if (mysql_stmt_bind_param(tokq->tokmt, txp->mbnd)) {
@@ -194,7 +194,7 @@ static int tokid_query_init(struct txrec_info *txp)
 		goto err_exit_10;
 	}
 	memset(txp->rbnd, 0, 3*sizeof(MYSQL_BIND));
-	txp->rbnd[0].buffer_type = MYSQL_TYPE_SHORT;
+	txp->rbnd[0].buffer_type = MYSQL_TYPE_LONG;
 	txp->rbnd[0].buffer = &tokq->tokid;
 	txp->rbnd[0].is_unsigned = 1;
 	txp->rbnd[1].buffer_type = MYSQL_TYPE_STRING;
@@ -730,7 +730,7 @@ static int txrec_info_init(struct txrec_info *txp, struct winfo *wif)
 	txp->mbnd[0].buffer = txp->val_query.keyhash;
 	txp->mbnd[0].buffer_length = RIPEMD_LEN;
 	txp->mbnd[0].length = &txp->val_query.ripe_len;
-	txp->mbnd[1].buffer_type = MYSQL_TYPE_SHORT;
+	txp->mbnd[1].buffer_type = MYSQL_TYPE_LONG;
 	txp->mbnd[1].buffer = &txp->val_query.etoken_id;
 	txp->mbnd[1].is_unsigned = 1;
 	if (mysql_stmt_bind_param(txp->umt, txp->mbnd)) {
