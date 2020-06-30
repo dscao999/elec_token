@@ -15,6 +15,7 @@
 #include <string.h>
 #include <my_global.h>
 #include <mysql.h>
+#include <mysqld_error.h>
 #include "global_param.h"
 #include "loglog.h"
 #include "wcomm.h"
@@ -244,7 +245,7 @@ static const char utxo_update[] = "UPDATE utxo SET in_process = 1 WHERE " \
 static int txrec_verify(int sock, const struct winfo *wif,
 		struct txrec_info *txp)
 {
-	int suc, mysql_retv, txcnt, numb, i;
+	int suc, sqlerr, numb, i;
 	struct txrec *tx;
 	struct sockaddr_in *sockaddr;
 	struct tx_etoken_in **vins, *vin;
@@ -257,27 +258,6 @@ static int txrec_verify(int sock, const struct winfo *wif,
 	fclose(fout);
 
 	suc = 0;
-	sha256_dgst_2str(txp->txop.sha_dgst,
-			(const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
-	txp->txop.sha_len = SHA_DGST_LEN;
-	if (mysql_stmt_execute(txp->qmt)) {
-		logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n", txid_query,
-				mysql_stmt_error(txp->qmt));
-		suc = -1;
-		goto exit_10;
-	}
-	txcnt = 0;
-	mysql_retv = mysql_stmt_fetch(txp->qmt);
-	while (mysql_retv != MYSQL_NO_DATA) {
-		txcnt += 1;
-		mysql_retv = mysql_stmt_fetch(txp->qmt);
-	}
-	mysql_stmt_free_result(txp->qmt);
-	if (txcnt > 0) {
-		suc = 2;
-		goto exit_10;
-	}
-
 	tx = tx_deserialize(wif->wpkt.pkt, wif->wpkt.len);
 	if (!tx)
 		goto exit_10;
@@ -285,19 +265,22 @@ static int txrec_verify(int sock, const struct winfo *wif,
 	if (suc == 0)
 		goto exit_20;
 
-	if (mysql_query(txp->mcon, "START TRANSACTION")) {
-		logmsg(LOG_ERR, "START TRANSACTION failed: %s\n",
-				mysql_error(txp->mcon));
-		suc = -1;
-		goto exit_20;
-	}
+	sha256_dgst_2str(txp->txop.sha_dgst,
+			(const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
+	txp->txop.sha_len = SHA_DGST_LEN;
 	txp->txop.txrec_len = wif->wpkt.len;
        	if (mysql_stmt_execute(txp->imt)) {
-		logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n",
-				txid_query, mysql_stmt_error(txp->qmt));
-		suc = -1;
-		goto exit_30;
+		sqlerr = mysql_stmt_errno(txp->imt);
+		if (sqlerr == ER_DUP_ENTRY) {
+			suc = 2;
+		} else {
+			suc = -1;
+			logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n",
+					txid_query, mysql_stmt_error(txp->qmt));
+		}
+		goto exit_20;
 	}
+	suc = 1;
 	txp->txop.sha_len = SHA_DGST_LEN;
 	vins = tx->vins;
 	for (i = 0; i < tx->vin_num; i++, vins++) {
@@ -309,24 +292,10 @@ static int txrec_verify(int sock, const struct winfo *wif,
 					utxo_update,
 					mysql_stmt_error(txp->uumt));
 			suc = -1;
-			goto exit_30;
+			goto exit_20;
 		}
 	}
 
-exit_30:
-	if (suc == 1) {
-		if (mysql_commit(txp->mcon)) {
-			logmsg(LOG_ERR, "COMMIT failed: %s\n",
-					mysql_error(txp->mcon));
-			suc = -1;
-		}
-	} else {
-		if (mysql_rollback(txp->mcon)) {
-			logmsg(LOG_ERR, "ROLLBACK failed: %s\n",
-					mysql_error(txp->mcon));
-			suc = -1;
-		}
-	}
 exit_20:
 	tx_destroy(tx);
 exit_10:
@@ -851,7 +820,8 @@ void *tx_process(void *arg)
 			if (verified == 1 && wm->pipd != -1) {
 				if (notify_tx_logging(wm->pipd) == -1)
 					global_exit = 1;
-			}
+			} else if (verified < 0)
+				global_exit = 1;
 			break;
 		case UTXO_REQ:
 			utxo_do_query(wm->sock, wif, txp);
