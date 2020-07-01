@@ -51,7 +51,27 @@ struct txrec *tx_deserialize(const char *buf, int len);
 
 void tx_destroy(struct txrec *tx);
 
-__declspec(dllexport) int __cdecl tx_create_token(char *buf, int buflen, int tkid, ulong64 value,
+__declspec(dllexport) int __cdecl
+tx_create_token(char *buf, int buflen, int tkid, ulong64 value,
 		int days, const char *payto, const struct ecc_key *ecckey);
+
+__declspec(dllexport) int __cdecl
+tx_trans_begin(struct txrec **ptr, unsigned int tokid, ulong64 value,
+		const unsigned char *payto);
+
+__declspec(dllexport) int __cdecl tx_trans_add(ulong64 txptr, unsigned char *txid,
+		int vout_idx);
+
+__declspec(dllexport) int __cdecl tx_trans_sup(ulong64 txptr, ulong64 value,
+		const unsigned char *payto);
+
+__declspec(dllexport) int __cdecl
+tx_trans_sign(ulong64 txptr, unsigned char *buf, int buflen,
+		const struct ecc_key *skey, int idx);
+
+__declspec(dllexport) int __cdecl tx_trans_end(char *buf, int buflen,
+		ulong64 txptr);
+
+__declspec(dllexport) void __cdecl tx_trans_abort(ulong64 txptr);
 
 #endif /* TOKTX_DSCAO__ */

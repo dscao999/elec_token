@@ -110,8 +110,8 @@ void global_param_init(const char *cnf)
 		return;
 	inif = fopen(cnf, "rb");
 	if (!inif) {
-		logmsg(LOG_WARNING, "Cannot open configuration: %s\n",
-				strerror(errno));
+		logmsg(LOG_WARNING, "Cannot open configuration file: %s, %s\n",
+				cnf, strerror(errno));
 		return;
 	}
 	memset(&ment, 0, sizeof(ment));
