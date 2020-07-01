@@ -696,7 +696,8 @@ err_exit_10:
 	return retv;
 }
 
-static int spawn_tx_service(const char *tx_service, pid_t *chldpid)
+static int spawn_tx_service(const char *tx_service, pid_t *chldpid,
+		const char *conf)
 {
 	int pipd[2];
 	int sysret, retv;
@@ -720,7 +721,7 @@ static int spawn_tx_service(const char *tx_service, pid_t *chldpid)
 	case 0:
 		close(pipd[0]);
 		sprintf(argv1, "%d", pipd[1]);
-		sysret = execl(tx_service, basename(tx_service), argv1, NULL);
+		sysret = execl(tx_service, basename(tx_service), conf, argv1, NULL);
 		if (sysret == -1) {
 			logmsg(LOG_ERR, "execl failed %d: %s\n", errno,
 					strerror(errno));
@@ -818,8 +819,13 @@ int main(int argc, char *argv[])
 	int i, elapsed, pipd;
 	pid_t tx_svc_pid;
 	struct timespec intvl;
+	const char *conf;
 
-	global_param_init(NULL);
+	if (argc > 1)
+		conf = argv[1];
+	else
+		conf = "/etc/etoken.conf";
+	global_param_init(conf);
 	if (tok_block_init())
 		exit(10);
 	dbinfo = dbcon_init();
@@ -848,7 +854,7 @@ int main(int argc, char *argv[])
 		retv = 1;
 		goto exit_10;
 	}
-	pipd = spawn_tx_service(tx_service, &tx_svc_pid);
+	pipd = spawn_tx_service(tx_service, &tx_svc_pid, conf);
 	if (pipd == -1) {
 		logmsg(LOG_ERR, "tx_service cannot start up.\n");
 		retv = 10;
@@ -869,7 +875,7 @@ int main(int argc, char *argv[])
 				global_exit = 1;
 			 else if (global_exit == 0) {
 				 close(pipd);
-				 pipd = spawn_tx_service(tx_service, &tx_svc_pid);
+				 pipd = spawn_tx_service(tx_service, &tx_svc_pid, conf);
 				 if (pipd == -1)
 					 global_exit = 1;
 			 }

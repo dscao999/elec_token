@@ -4,7 +4,7 @@ CFLAGS += -D_GNU_SOURCE
 LDFLAGS += -pthread -g
 DBLIB = -lmariadbclient
 
-VPATH = ../ecc256
+VPATH = ../ecc256 ../ezini
 
 .PHONY: all clean release
 
@@ -12,21 +12,21 @@ all: genblk toktx ../lib/libtoktx.so tx_service tx_logging edebug
 
 eccobj = ecc_secp256k1.o sha256.o dscrc.o base64.o dsaes.o ripemd160.o rand32bytes.o
 
-genblk: genblock.o tok_block.o global_param.o toktx.o tokens.o virtmach.o $(eccobj)
+genblk: genblock.o tok_block.o global_param.o ezini.o toktx.o tokens.o virtmach.o $(eccobj)
 	$(LINK.o) -pthread $^ -lmariadbclient -lgmp -o $@
 
-toktx: txtokens.o toktx.o tokens.o toktx_svr.o virtmach.o global_param.o $(eccobj)
+toktx: txtokens.o toktx.o tokens.o toktx_svr.o virtmach.o global_param.o ezini.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 
-tx_service: tx_service.o toktx.o tokens.o virtmach.o tok_block.o global_param.o \
+tx_service: tx_service.o toktx.o tokens.o virtmach.o tok_block.o global_param.o ezini.o \
 	wcomm.o toktx_svr.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 
-tx_logging: tx_logging.o tok_block.o toktx.o global_param.o virtmach.o \
+tx_logging: tx_logging.o tok_block.o toktx.o global_param.o ezini.o virtmach.o \
 	tokens.o toktx_svr.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 
-edebug: etoken_debug.o tok_block.o toktx.o tokens.o toktx_svr.o global_param.o \
+edebug: etoken_debug.o tok_block.o toktx.o tokens.o toktx_svr.o global_param.o ezini.o \
 	virtmach.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 

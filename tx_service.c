@@ -929,8 +929,13 @@ int main(int argc, char *argv[])
 	int retv, sysret;
 	struct sigaction sigact;
 	pthread_t rcvthd;
+	const char *conf;
 
-	global_param_init(NULL);
+	if (argc > 1)
+		conf = argv[1];
+	else
+		conf = "/etc/etoken.conf";
+	global_param_init(conf);
 	if (tok_block_init() != 0) {
 		logmsg(LOG_ERR, "Cannot Initialize Blockchain.\n");
 		exit(10);
@@ -940,8 +945,8 @@ int main(int argc, char *argv[])
 		global_param_exit();
 		return 1;
 	}
-	if (argc > 1)
-		wm->pipd = atoi(argv[1]);
+	if (argc > 2)
+		wm->pipd = atoi(argv[2]);
 	else
 		wm->pipd = -1;
 
