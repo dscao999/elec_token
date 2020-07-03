@@ -611,18 +611,18 @@ static int tok_do_query(int sock, const struct winfo *wif,
 		struct txrec_info *txp)
 {
 	char *curmsg;
-	int mysql_retv, len, numb;
+	int mysql_retv, len, numb, rem;
 	struct wpacket *wpkt;
 	struct sockaddr_in *sockaddr;
 	struct tokid_info *tokq = &txp->tokq;
-	unsigned short *catid, *tokid;
+	unsigned int *catid, *tokid;
 
 	wpkt = &txp->wpkt;
 	curmsg = wpkt->pkt;
 	numb = 0;
 	len = 0;
 
-	catid = (unsigned short *)wif->wpkt.pkt;
+	catid = (unsigned int *)wif->wpkt.pkt;
 	tokq->catid = *catid;
 	if (mysql_stmt_execute(tokq->tokmt)) {
 		logmsg(LOG_ERR, "mysql_execute_failed: %s->%s\n",
@@ -638,7 +638,7 @@ static int tok_do_query(int sock, const struct winfo *wif,
 	}
 	mysql_retv = mysql_stmt_fetch(tokq->tokmt);
 	while (mysql_retv != MYSQL_NO_DATA) {
-		tokid = (unsigned short *)curmsg;
+		tokid = (unsigned int *)curmsg;
 		*tokid = tokq->tokid;
 		curmsg += sizeof(*tokid);
 		len += sizeof(*tokid);
@@ -654,9 +654,11 @@ static int tok_do_query(int sock, const struct winfo *wif,
 		memcpy(curmsg, tokq->descp, tokq->descp_len);
 		curmsg += tokq->descp_len;
 		len += tokq->descp_len;
-		if (((unsigned long)curmsg) & 1) {
-			curmsg++;
-			len++;
+		rem = (unsigned long)curmsg & 3;
+		if (rem) {
+			curmsg += 4 - rem;
+			len += 4 - rem;
+			assert((len & 3) == 0);
 		}
 
 		mysql_retv = mysql_stmt_fetch(tokq->tokmt);
@@ -664,7 +666,7 @@ static int tok_do_query(int sock, const struct winfo *wif,
 	mysql_stmt_free_result(tokq->tokmt);
 
 exit_100:
-	tokid = (unsigned short *)curmsg;
+	tokid = (unsigned int *)curmsg;
 	*tokid = 0;
 	len += sizeof(*tokid);
 	wpkt->len = len;
