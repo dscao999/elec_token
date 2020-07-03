@@ -41,14 +41,6 @@ struct hashtx_info {
 	};
 };
 
-struct hashkey_query {
-	ulong64 value, ripe_len, sha_len;
-	unsigned char txid[SHA_DGST_LEN];
-	unsigned char keyhash[RIPEMD_LEN];
-	unsigned int etoken_id;
-	unsigned char vout_idx;
-};
-
 struct tokid_query {
 	MYSQL_STMT *vmt, *catmt, *tokmt;
 	const char *vendor_query, *cat_query, *tok_query;
@@ -57,15 +49,102 @@ struct tokid_query {
 	char name[16], descp[128];
 };
 
+static const char utxo_query[] = "SELECT value, txid, vout_idx FROM utxo " \
+				  "WHERE keyhash = ? AND etoken_id = ? " \
+				  "AND in_process = false AND blockid > 1";
+struct utxo_info {
+	MYSQL *mcon;
+	MYSQL_STMT *qmt;
+	const char *query;
+	MYSQL_BIND mbnd[2], rbnd[3];
+	unsigned long txid_len, pkey_len;
+	unsigned long value;
+	char txid[SHA_DGST_LEN];
+	char pkey[RIPEMD_LEN];
+	unsigned int etoken_id;
+	unsigned char vout_idx;
+};
+
+static inline void utxo_info_release(struct utxo_info *utxo)
+{
+	mysql_stmt_close(utxo->qmt);
+	mysql_close(utxo->mcon);
+}
+
+static int utxo_info_init(struct utxo_info *utxo)
+{
+	int retv = 0;
+
+	utxo->query = utxo_query;
+	utxo->mcon = mysql_init(NULL);
+	if (!check_pointer(utxo->mcon))
+		return -ENOMEM;
+	if (mysql_real_connect(utxo->mcon, g_param->db.host, g_param->db.user,
+				g_param->db.passwd, g_param->db.dbname, 0,
+				NULL, 0) == NULL ) {
+		logmsg(LOG_ERR, "mysql_real_connect failed: %s\n",
+				mysql_error(utxo->mcon));
+		retv = -mysql_errno(utxo->mcon);
+		goto err_exit_10;
+	}
+	utxo->qmt = mysql_stmt_init(utxo->mcon);
+	if (!check_pointer(utxo->qmt)) {
+		retv = -ENOMEM;
+		goto err_exit_10;
+	}
+	if (mysql_stmt_prepare(utxo->qmt, utxo->query, strlen(utxo->query))) {
+		logmsg(LOG_ERR, "Sql statement preparation failed: %s:%s \n",
+				utxo->query, mysql_stmt_error(utxo->qmt));
+		retv = -mysql_stmt_errno(utxo->qmt);
+		goto err_exit_20;
+	}
+	memset(utxo->mbnd, 0, 2*sizeof(MYSQL_BIND));
+	utxo->mbnd[0].buffer_type = MYSQL_TYPE_BLOB;
+	utxo->mbnd[0].buffer = utxo->pkey;
+	utxo->mbnd[0].buffer_length = RIPEMD_LEN;
+	utxo->mbnd[0].length = &utxo->pkey_len;
+	utxo->mbnd[1].buffer_type = MYSQL_TYPE_LONG;
+	utxo->mbnd[1].buffer = &utxo->etoken_id;
+	utxo->mbnd[1].is_unsigned = 1;
+	if (mysql_stmt_bind_param(utxo->qmt, utxo->mbnd)) {
+		logmsg(LOG_ERR, "mysql_stmt_bind_param failed: %s, %s\n",
+				utxo->query, mysql_stmt_error(utxo->qmt));
+		retv = -mysql_stmt_errno(utxo->qmt);
+		goto err_exit_20;
+	}
+	memset(utxo->rbnd, 0, 3*sizeof(MYSQL_BIND));
+	utxo->rbnd[0].buffer_type = MYSQL_TYPE_LONGLONG;
+	utxo->rbnd[0].buffer = &utxo->value;
+	utxo->rbnd[0].is_unsigned = 1;
+	utxo->rbnd[1].buffer_type = MYSQL_TYPE_BLOB;
+	utxo->rbnd[1].buffer = utxo->txid;
+	utxo->rbnd[1].buffer_length = SHA_DGST_LEN;
+	utxo->rbnd[1].length = &utxo->txid_len;
+	utxo->rbnd[2].buffer_type = MYSQL_TYPE_TINY;
+	utxo->rbnd[2].buffer = &utxo->vout_idx;
+	utxo->rbnd[2].is_unsigned = 1;
+	if (mysql_stmt_bind_result(utxo->qmt, utxo->rbnd)) {
+		logmsg(LOG_ERR, "mysql_stmt_bind_result failed: %s, %s\n",
+				utxo->query, mysql_stmt_error(utxo->qmt));
+		retv = -mysql_stmt_errno(utxo->qmt);
+		goto err_exit_20;
+	}
+	return retv;
+
+err_exit_20:
+	mysql_stmt_close(utxo->qmt);
+err_exit_10:
+	mysql_close(utxo->mcon);
+	return retv;
+}
+
 struct txrec_info {
 	MYSQL *mcon;
 	MYSQL_STMT *qmt, *imt, *umt, *uumt;
 	struct tokid_query tokq;
-	union {
-		struct hashtx_info txop;
-		struct hashkey_query val_query;
-	};
+	struct hashtx_info txop;
 	MYSQL_BIND mbnd[2], rbnd[3];
+	struct utxo_info utxo;
 	struct wpacket wpkt;
 } __attribute__((aligned(8)));
 
@@ -221,6 +300,8 @@ err_exit_10:
 
 static void txrec_info_release(struct txrec_info *txp)
 {
+	utxo_info_release(&txp->utxo);
+
 	tokid_query_exit(txp);
 	if (txp->umt)
 		mysql_stmt_close(txp->umt);
@@ -236,9 +317,6 @@ static const char txid_query[] = "SELECT seq FROM txrec_pool WHERE " \
 				  "txhash = ? LOCK IN SHARE MODE";
 static const char txid_insert[] = "INSERT INTO txrec_pool(txhash, txdata) " \
 				  "VALUES(?, ?)";
-static const char utxo_query[] = "SELECT value, txid, vout_idx FROM utxo " \
-				  "WHERE keyhash = ? AND etoken_id = ? " \
-				  "AND in_process = false AND blockid > 1";
 static const char utxo_update[] = "UPDATE utxo SET in_process = 1 WHERE " \
 				   "txid = ? AND vout_idx = ?";
 
@@ -323,50 +401,52 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 {
 	unsigned char *ackval;
 	const struct utxo_query *uq;
-	unsigned short *etoken_id;
+	unsigned int *etoken_id;
 	char *curmsg;
 	int mysql_retv, len, numb;
 	struct wpacket *wpkt;
 	struct sockaddr_in *sockaddr;
+	struct utxo_info *utxo = &txp->utxo;
 
-	etoken_id = (unsigned short *)wif->wpkt.pkt;
-	txp->val_query.etoken_id = *etoken_id;
-	txp->val_query.ripe_len = RIPEMD_LEN;
 	wpkt = &txp->wpkt;
+	etoken_id = (unsigned int *)wif->wpkt.pkt;
+	utxo->etoken_id = *etoken_id;
+	utxo->pkey_len = RIPEMD_LEN;
 	curmsg = wpkt->pkt;
 
 	len = 0;
-	uq = (const struct utxo_query *)(wif->wpkt.pkt + sizeof(unsigned short));
+	uq = (const struct utxo_query *)(wif->wpkt.pkt + sizeof(unsigned int));
 	while (uq->len != 0) {
 		assert(uq->len == RIPEMD_LEN);
-		memcpy(txp->val_query.keyhash, uq->keyhash, uq->len);
+		memcpy(utxo->pkey, uq->keyhash, uq->len);
 		*curmsg = uq->len;
 		memcpy(curmsg+1, uq->keyhash, uq->len);
 		curmsg += uq->len + 1;
 		len += uq->len + 1;
 		ackval = (unsigned char *)curmsg;
-		if (mysql_stmt_execute(txp->umt)) {
+		if (mysql_stmt_execute(utxo->qmt)) {
 			logmsg(LOG_ERR, "mysql_execute failed: %s, %s\n",
-					utxo_query, mysql_stmt_error(txp->umt));
+					utxo->query,
+					mysql_stmt_error(utxo->qmt));
 		} else {
-			mysql_stmt_store_result(txp->umt);
-			mysql_retv = mysql_stmt_fetch(txp->umt);
+			mysql_stmt_store_result(utxo->qmt);
+			mysql_retv = mysql_stmt_fetch(utxo->qmt);
 			while (mysql_retv != MYSQL_NO_DATA) {
-				memcpy(ackval, &txp->val_query.value, sizeof(unsigned long));
+				memcpy(ackval, &utxo->value, sizeof(unsigned long));
 				curmsg += sizeof(unsigned long);
 				len += sizeof(unsigned long);
-				assert(txp->val_query.sha_len == SHA_DGST_LEN);
-				*curmsg = txp->val_query.sha_len;
-				memcpy(curmsg+1, txp->val_query.txid, txp->val_query.sha_len);
-				curmsg += txp->val_query.sha_len + 1;
-				len += txp->val_query.sha_len + 1;
-				*curmsg = txp->val_query.vout_idx;
+				assert(utxo->txid_len == SHA_DGST_LEN);
+				*curmsg = utxo->txid_len;
+				memcpy(curmsg+1, utxo->txid, utxo->txid_len);
+				curmsg += utxo->txid_len + 1;
+				len += utxo->txid_len + 1;
+				*curmsg = utxo->vout_idx;
 				curmsg += 1;
 				len += 1;
-				mysql_retv = mysql_stmt_fetch(txp->umt);
+				mysql_retv = mysql_stmt_fetch(utxo->qmt);
 				ackval = (unsigned char *)curmsg;
 			}
-			mysql_stmt_free_result(txp->umt);
+			mysql_stmt_free_result(utxo->qmt);
 		}
 		memset(ackval, 0, sizeof(unsigned long));
 		len += sizeof(unsigned long);
@@ -612,6 +692,12 @@ static int txrec_info_init(struct txrec_info *txp, struct winfo *wif)
 
 	memset(txp, 0, sizeof(struct txrec_info));
 
+	retv = utxo_info_init(&txp->utxo);
+	if (retv != 0) {
+		logmsg(LOG_ERR, "Cannot initialize utxo_info: %d\n", retv);
+		return retv;
+	}
+
 	txp->mcon = mysql_init(NULL);
 	if (!check_pointer(txp->mcon))
 		return -ENOMEM;
@@ -683,49 +769,6 @@ static int txrec_info_init(struct txrec_info *txp, struct winfo *wif)
 		goto err_exit_30;
 	}
 
-	txp->umt = mysql_stmt_init(txp->mcon);
-	if (!check_pointer(txp->umt)) {
-		retv = -ENOMEM;
-		goto err_exit_30;
-	}
-	if (mysql_stmt_prepare(txp->umt, utxo_query, strlen(utxo_query))) {
-		logmsg(LOG_ERR, "Sql statement preparation failed: %s:%s \n",
-				utxo_query, mysql_stmt_error(txp->umt));
-		retv = -mysql_stmt_errno(txp->umt);
-		goto err_exit_40;
-	}
-	memset(txp->mbnd, 0, 2*sizeof(MYSQL_BIND));
-	txp->mbnd[0].buffer_type = MYSQL_TYPE_BLOB;
-	txp->mbnd[0].buffer = txp->val_query.keyhash;
-	txp->mbnd[0].buffer_length = RIPEMD_LEN;
-	txp->mbnd[0].length = &txp->val_query.ripe_len;
-	txp->mbnd[1].buffer_type = MYSQL_TYPE_LONG;
-	txp->mbnd[1].buffer = &txp->val_query.etoken_id;
-	txp->mbnd[1].is_unsigned = 1;
-	if (mysql_stmt_bind_param(txp->umt, txp->mbnd)) {
-		logmsg(LOG_ERR, "mysql_stmt_bind_param failed: %s, %s\n",
-				txid_query, mysql_stmt_error(txp->umt));
-		retv = -mysql_stmt_errno(txp->umt);
-		goto err_exit_40;
-	}
-	memset(txp->rbnd, 0, 2*sizeof(MYSQL_BIND));
-	txp->rbnd[0].buffer_type = MYSQL_TYPE_LONGLONG;
-	txp->rbnd[0].buffer = &txp->val_query.value;
-	txp->rbnd[0].is_unsigned = 1;
-	txp->rbnd[1].buffer_type = MYSQL_TYPE_BLOB;
-	txp->rbnd[1].buffer = txp->val_query.txid;
-	txp->rbnd[1].buffer_length = SHA_DGST_LEN;
-	txp->rbnd[1].length = &txp->val_query.sha_len;
-	txp->rbnd[2].buffer_type = MYSQL_TYPE_TINY;
-	txp->rbnd[2].buffer = &txp->val_query.vout_idx;
-	txp->rbnd[2].is_unsigned = 1;
-	if (mysql_stmt_bind_result(txp->umt, txp->rbnd)) {
-		logmsg(LOG_ERR, "mysql_stmt_bind_result failed: %s, %s\n",
-				txid_query, mysql_stmt_error(txp->qmt));
-		retv = -mysql_stmt_errno(txp->umt);
-		goto err_exit_40;
-	}
-
 	txp->uumt = mysql_stmt_init(txp->mcon);
 	if (!check_pointer(txp->uumt)) {
 		retv = -ENOMEM;
@@ -761,7 +804,6 @@ static int txrec_info_init(struct txrec_info *txp, struct winfo *wif)
 err_exit_50:
 	mysql_stmt_close(txp->uumt);
 err_exit_40:
-	mysql_stmt_close(txp->umt);
 err_exit_30:
 	mysql_stmt_close(txp->imt);
 err_exit_20:
