@@ -41,9 +41,9 @@ struct hashtx_info {
 	};
 };
 
-struct tokid_query {
-	MYSQL_STMT *vmt, *catmt, *tokmt;
-	const char *vendor_query, *cat_query, *tok_query;
+struct tokid_info {
+	MYSQL_STMT *venmt, *catmt, *tokmt;
+	const char *ven_query, *cat_query, *tok_query;
 	ulong64 name_len, descp_len;
 	unsigned int vid, catid, tokid;
 	char name[16], descp[128];
@@ -141,7 +141,7 @@ err_exit_10:
 struct txrec_info {
 	MYSQL *mcon;
 	MYSQL_STMT *qmt, *imt, *umt, *uumt;
-	struct tokid_query tokq;
+	struct tokid_info tokq;
 	struct hashtx_info txop;
 	MYSQL_BIND mbnd[2], rbnd[3];
 	struct utxo_info utxo;
@@ -154,9 +154,9 @@ static const char *cat_query = "SELECT id, name, descp FROM etoken_cat " \
 static const char *tok_query = "SELECT id, name, descp FROM etoken_type " \
 				"WHERE cat_id = ?";
 
-static void tokid_query_exit(struct txrec_info *txp)
+static void tokid_info_release(struct txrec_info *txp)
 {
-	struct tokid_query *tokq = &txp->tokq;
+	struct tokid_info *tokq = &txp->tokq;
 
 	if (tokq->tokmt) {
 		mysql_stmt_close(tokq->tokmt);
@@ -166,26 +166,26 @@ static void tokid_query_exit(struct txrec_info *txp)
 		mysql_stmt_close(tokq->catmt);
 		tokq->catmt = NULL;
 	}
-	if (tokq->tokmt) {
-		mysql_stmt_close(tokq->tokmt);
+	if (tokq->venmt) {
+		mysql_stmt_close(tokq->venmt);
 		tokq->tokmt = NULL;
 	}
 }
 
-static int tokid_query_init(struct txrec_info *txp)
+static int tokid_info_init(struct txrec_info *txp)
 {
-	struct tokid_query *tokq = &txp->tokq;
+	struct tokid_info *tokq = &txp->tokq;
 	int retv = 0;
 
-	tokq->vendor_query = vendor_query;
-	tokq->vmt = mysql_stmt_init(txp->mcon);
-	if (!check_pointer(tokq->vmt))
+	tokq->ven_query = vendor_query;
+	tokq->venmt = mysql_stmt_init(txp->mcon);
+	if (!check_pointer(tokq->venmt))
 		return -ENOMEM;
-	if (mysql_stmt_prepare(tokq->vmt, tokq->vendor_query,
-				strlen(tokq->vendor_query))) {
+	if (mysql_stmt_prepare(tokq->venmt, tokq->ven_query,
+				strlen(tokq->ven_query))) {
 		logmsg(LOG_ERR, "Sql statement preparation failed: %s:%s \n",
-				tokq->vendor_query, mysql_stmt_error(tokq->vmt));
-		retv = -mysql_stmt_errno(tokq->vmt);
+				tokq->ven_query, mysql_stmt_error(tokq->venmt));
+		retv = -mysql_stmt_errno(tokq->venmt);
 		goto err_exit_10;
 	}
 	memset(txp->rbnd, 0, 3*sizeof(MYSQL_BIND));
@@ -200,11 +200,11 @@ static int tokid_query_init(struct txrec_info *txp)
 	txp->rbnd[2].buffer = tokq->descp;
 	txp->rbnd[2].buffer_length = sizeof(tokq->descp);
 	txp->rbnd[2].length = &tokq->descp_len;
-	if (mysql_stmt_bind_result(tokq->vmt, txp->rbnd)) {
+	if (mysql_stmt_bind_result(tokq->venmt, txp->rbnd)) {
 		logmsg(LOG_ERR, "mysql_stmt_bind_result failed: %s, %s\n",
-				tokq->vendor_query,
-				mysql_stmt_error(tokq->vmt));
-		retv = -mysql_stmt_errno(txp->qmt);
+				tokq->ven_query,
+				mysql_stmt_error(tokq->venmt));
+		retv = -mysql_stmt_errno(tokq->venmt);
 		goto err_exit_10;
 	}
 
@@ -294,7 +294,7 @@ static int tokid_query_init(struct txrec_info *txp)
 	return retv;
 
 err_exit_10:
-	tokid_query_exit(txp);
+	tokid_info_release(txp);
 	return retv;
 }
 
@@ -302,7 +302,7 @@ static void txrec_info_release(struct txrec_info *txp)
 {
 	utxo_info_release(&txp->utxo);
 
-	tokid_query_exit(txp);
+	tokid_info_release(txp);
 	if (txp->umt)
 		mysql_stmt_close(txp->umt);
 	if (txp->imt)
@@ -467,33 +467,33 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 static int vendor_do_query(int sock, const struct winfo *wif,
 		struct txrec_info *txp)
 {
-	char *curmsg;
-	int mysql_retv, len, numb;
+	unsigned char *curmsg;
+	int mysql_retv, len, numb, rem;
 	struct wpacket *wpkt;
 	struct sockaddr_in *sockaddr;
-	struct tokid_query *tokq = &txp->tokq;
-	unsigned short *vid;
+	struct tokid_info *tokq = &txp->tokq;
+	unsigned int *vid;
 
 	wpkt = &txp->wpkt;
-	curmsg = wpkt->pkt;
+	curmsg = (unsigned char *)wpkt->pkt;
 	numb = 0;
 	len = 0;
 
-	if (mysql_stmt_execute(tokq->vmt)) {
+	if (mysql_stmt_execute(tokq->venmt)) {
 		logmsg(LOG_ERR, "mysql_execute_failed: %s->%s\n",
-				tokq->vendor_query,
-				mysql_stmt_error(tokq->vmt));
+				tokq->ven_query,
+				mysql_stmt_error(tokq->venmt));
 		goto exit_100;
 	}
-	if (mysql_stmt_store_result(tokq->vmt)) {
+	if (mysql_stmt_store_result(tokq->venmt)) {
 		logmsg(LOG_ERR, "mysql_store_result failed: %s->%s\n",
-				tokq->vendor_query,
-				mysql_stmt_error(tokq->vmt));
+				tokq->ven_query,
+				mysql_stmt_error(tokq->venmt));
 		goto exit_100;
 	}
-	mysql_retv = mysql_stmt_fetch(tokq->vmt);
+	mysql_retv = mysql_stmt_fetch(tokq->venmt);
 	while (mysql_retv != MYSQL_NO_DATA) {
-		vid = (unsigned short *)curmsg;
+		vid = (unsigned int *)curmsg;
 		*vid = tokq->vid;
 		curmsg += sizeof(*vid);
 		len += sizeof(*vid);
@@ -509,16 +509,18 @@ static int vendor_do_query(int sock, const struct winfo *wif,
 		memcpy(curmsg, tokq->descp, tokq->descp_len);
 		curmsg += tokq->descp_len;
 		len += tokq->descp_len;
-		if (((unsigned long)curmsg) & 1) {
-			curmsg++;
-			len++;
+		rem = (unsigned long)curmsg & 3;
+		if (rem) {
+			curmsg += 4 - rem;
+			len += 4 - rem;
+			assert((len & 3) == 0);
 		}
 
-		mysql_retv = mysql_stmt_fetch(tokq->vmt);
+		mysql_retv = mysql_stmt_fetch(tokq->venmt);
 	}
 
 exit_100:
-	vid = (unsigned short *)curmsg;
+	vid = (unsigned int *)curmsg;
 	*vid = 0;
 	len += sizeof(*vid);
 	wpkt->len = len;
@@ -539,7 +541,7 @@ static int cat_do_query(int sock, const struct winfo *wif,
 	int mysql_retv, len, numb;
 	struct wpacket *wpkt;
 	struct sockaddr_in *sockaddr;
-	struct tokid_query *tokq = &txp->tokq;
+	struct tokid_info *tokq = &txp->tokq;
 	unsigned short *catid, *vid;
 
 	wpkt = &txp->wpkt;
@@ -610,7 +612,7 @@ static int tok_do_query(int sock, const struct winfo *wif,
 	int mysql_retv, len, numb;
 	struct wpacket *wpkt;
 	struct sockaddr_in *sockaddr;
-	struct tokid_query *tokq = &txp->tokq;
+	struct tokid_info *tokq = &txp->tokq;
 	unsigned short *catid, *tokid;
 
 	wpkt = &txp->wpkt;
@@ -795,7 +797,7 @@ static int txrec_info_init(struct txrec_info *txp, struct winfo *wif)
 		goto err_exit_50;
 	}
 
-	retv = tokid_query_init(txp);
+	retv = tokid_info_init(txp);
 	if (retv != 0)
 		goto err_exit_50;
 
