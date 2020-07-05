@@ -135,58 +135,58 @@ static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
 	return lock;
 }
 
-int tx_verify(const struct txrec *tx)
+int tx_verify(const unsigned char *txrec, int len)
 {
-	int retv, i, lock_len, suc, serlen;
+	int i, lock_len, suc, retv;
 	const struct tx_etoken_in *txin, **txins;
 	const struct tx_etoken_out *txout, **txouts;
 	const struct etoken *petk;
-	unsigned char *lock = NULL, *buf;
+	unsigned char *lock = NULL;
 	ulong64 out_val = 0, in_val = 0;
 	struct vmach *vm;
-	void *scratch;
+	struct txrec *tx;
 
 	suc = 0;
-	retv = 0;
-	if (!tx->vouts || *tx->vouts == NULL)
+	tx = tx_deserialize((const char *)txrec, len);
+	if (tx == NULL)
 		return suc;
+
 	txouts = (const struct tx_etoken_out **)tx->vouts;
 	petk = &(*txouts)->etk;
-	for (i = 0; i < tx->vout_num; i++, txouts++) {
+	for (i = 0; *txouts && i < tx->vout_num; i++, txouts++) {
 		txout = *txouts;
 		if (!etoken_equiv(&txout->etk, petk))
 			return suc;
 		out_val += txout->etk.value;
 	}
 
-	scratch = malloc(SCRATCH_LEN);
-	buf = scratch;
-	serlen = tx_serialize((char *)buf, SCRATCH_LEN, tx, 0);
-	assert(serlen <= SCRATCH_LEN);
+	suc = 1;
 	vm = vmach_init();
-	in_val = 0;
 	txins = (const struct tx_etoken_in **)tx->vins;
 	for(i = 0; i < tx->vin_num; i++, txins++) {
 		txin = *txins;
 		retv = vmach_execute(vm, txin->unlock, txin->unlock_len, NULL, 0);
-		if (retv < 0)
-			goto exit_20;
+		if (retv <= 0) {
+			suc = 0;
+			break;
+		}
 		lock = tx_vin_getlock(txin, petk->token_id, &lock_len, &in_val);
 		if (!lock) {
 		       	if (vmach_success(vm))
 				continue;
-			goto exit_20;
+			suc = 0;
+			break;
 		}
-		retv = vmach_execute(vm, lock, lock_len, buf, serlen);
+		retv = vmach_execute(vm, lock, lock_len, txrec, len);
 		free(lock);
-		if (retv <= 0 || !vmach_stack_empty(vm))
-			goto exit_20;
+		if (retv <= 0 || (!vmach_stack_empty(vm) &&
+					!vmach_success(vm))) {
+			suc = 0;
+			break;
+		}
 	}
 
-	suc = 1;
-exit_20:
 	vmach_exit(vm);
-	free(scratch);
 	if (in_val < out_val)
 		suc = 0;
 	return suc;

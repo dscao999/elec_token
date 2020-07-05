@@ -258,13 +258,16 @@ int vmach_execute(struct vmach *vm, const unsigned char *script, int slen,
 
 int vmach_success(struct vmach *vm)
 {
-	unsigned char *len;
+	unsigned char *content;
+	int len, value, suc;
 
 	if (vm->top != VMACH_STACK_SIZE - 1)
 		return 0;
-	len = vm->stack[vm->top];
-	if (*len != 1 || *(len+1) == 0)
-		return 0;
-	vmach_reset(vm);
-	return 1;
+	content = vm->stack[vm->top];
+	len = *content;
+	value = *(content+1);
+	suc = (len == 1 && value != 0);
+	if (suc)
+		vmach_reset(vm);
+	return suc;
 }

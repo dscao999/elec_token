@@ -21,9 +21,12 @@ int main(int argc, char *argv[])
 	struct txrec *tx;
 	int verify = 0;
 	int mark, fin, value, token, import = 0;
+	char *buf;
+	int txlen;
 	extern char *optarg;
 	extern int opterr, optopt;
 
+	buf = malloc(4096);
 	opterr = 0;
 	payto = NULL;
 	prkey = NULL;
@@ -97,8 +100,9 @@ int main(int argc, char *argv[])
 		save_tx(fname, tx);
 	} else {
 		tx = tx_read(fname);
+		txlen = tx_serialize(buf, 4096, tx, 1);
 		if (verify) {
-			if (!tx_verify(tx))
+			if (!tx_verify((unsigned char *)buf, txlen))
 				logmsg(LOG_ERR, "Invalid transaction.\n");
 			else
 				logmsg(LOG_INFO, "Valid transaction.\n");
@@ -108,6 +112,7 @@ int main(int argc, char *argv[])
 	}
 
 	tx_destroy(tx);
+	free(buf);
 	return 0;
 }
 

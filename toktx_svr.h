@@ -2,7 +2,7 @@
 #define TOKTX_SVR_DSCAO__
 #include "toktx.h"
 
-int tx_verify(const struct txrec *tx);
+int tx_verify(const unsigned char *txrec, int len);
 
 int tx_get_vout(const struct txrec *tx, struct txrec_vout *vout);
 
