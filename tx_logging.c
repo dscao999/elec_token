@@ -701,7 +701,10 @@ static int spawn_tx_service(const char *tx_service, pid_t *chldpid,
 {
 	int pipd[2];
 	int sysret, retv;
+	unsigned long elap;
 	char argv1[8];
+	struct timespec tm;
+	static struct timespec stm = {0, 0};
 	
 	sysret = pipe2(pipd, O_DIRECT|O_NONBLOCK);
 	if (sysret == -1) {
@@ -732,6 +735,13 @@ static int spawn_tx_service(const char *tx_service, pid_t *chldpid,
 		close(pipd[1]);
 		break;
 	}
+	clock_gettime(CLOCK_MONOTONIC_COARSE, &tm);
+	elap = time_elapsed(&stm, &tm);
+	if (elap < 600) {
+		logmsg(LOG_ERR, "tx_service spawn too rapidly: %lu milliseconds.\n", elap);
+		global_exit = 1;
+	}
+	stm = tm;
 
 	return retv;
 }
