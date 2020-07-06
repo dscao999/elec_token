@@ -637,8 +637,9 @@ static int txrec_pack(struct dbcon *db)
 	return blkhdr->numtxs;
 
 err_exit_10:
-	if (mysql_commit(db->mcon))
-		logmsg(LOG_ERR, "Commit failed: %s\n", mysql_error(db->mcon));
+	logmsg(LOG_ERR, "txrec pack failed. Aborting...\n");
+	if (mysql_rollback(db->mcon))
+		logmsg(LOG_ERR, "DB Rollback failed: %s\n", mysql_error(db->mcon));
 	return 0;
 }
 
