@@ -3,7 +3,7 @@
 #include <string.h>
 #include "sha256.h"
 #include "ecc_secp256k1.h"
-#include "toktx_svr.h"
+#include "toktx.h"
 
 #define MAX_BLKSIZE	(128*1024)
 
@@ -60,5 +60,7 @@ static inline struct txrec *txrec_area_deser(const struct txrec_area *txbuf)
 
 int tok_block_init(void);
 void tok_block_exit(void);
+
+int block_verify(const char *blkbuf, unsigned int blklen, unsigned long blkid);
 
 #endif /* TOK_BLOCK_DSCAO__ */

@@ -19,12 +19,6 @@ static const unsigned short VER = 100;
 static const unsigned char gensis[] = "Startup of Electronic Token " \
 				      "Blockchain. All started from Oct 2019 with Dashi Cao.";
 
-unsigned char * (*tx_from_blockchain)(const struct tx_etoken_in *txin,
-		int *lock_len, ulong64 *val) = NULL;
-
-static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
-		int *lock_len, ulong64 *val);
-
 static int num_zerobits(const unsigned char *hash)
 {
 	int zbits = 0, i, j;
@@ -357,17 +351,16 @@ static inline void txdb_con_exit(struct txdb_con *txcon)
 		mysql_close(txcon->mcon);
 }
 
-static int block_verify(struct txdb_con *blkdb)
+int block_verify(const char *blkbuf, unsigned int blklen, unsigned long blkid)
 {
 	int retv = 0, i;
 	unsigned char hdrhash[SHA_DGST_LEN];
-	struct bl_header *hdr = (struct bl_header *)blkdb->blkbuf;
-	struct etk_block *blk = (struct etk_block *)blkdb->blkbuf;
+	struct bl_header *hdr = (struct bl_header *)blkbuf;
+	struct etk_block *blk = (struct etk_block *)blkbuf;
 	unsigned char *txids, *cur_txid;
 	const struct txrec_area *txarea;
 
 	blhdr_hash(hdrhash, hdr);
-	assert(memcmp(hdrhash, blkdb->hdr_hash, SHA_DGST_LEN) == 0);
 	assert(num_zerobits(hdrhash) >= g_param->mine.zbits);
 	txids = malloc(SHA_DGST_LEN*(hdr->numtxs+1));
 	if (!check_pointer(txids))
@@ -382,118 +375,13 @@ static int block_verify(struct txdb_con *blkdb)
 	sha256_dgst_2str(cur_txid, (const unsigned char *)txids,
 			hdr->numtxs*SHA_DGST_LEN);
 	assert(memcmp(cur_txid, hdr->mtree_root, SHA_DGST_LEN) == 0);
-
-	logmsg(LOG_INFO, "Block %lu verified.\n", blkdb->blockid);
-	memcpy(txids, hdr->prev_hash, SHA_DGST_LEN);
-	blkdb->blockid -= 1;
-	if (mysql_stmt_execute(blkdb->btm)) {
-		logmsg(LOG_ERR, "mysql_stmt_execute failed: %s->%s\n",
-				blkdb->blk_query,
-				mysql_stmt_error(blkdb->btm));
-		goto exit_10;
-	}
-	if (mysql_stmt_store_result(blkdb->btm)) {
-		logmsg(LOG_ERR, "mysql_stmt_store_result failed: %s->%s\n",
-				blkdb->blk_query,
-				mysql_stmt_error(blkdb->btm));
-		goto exit_10;
-	}
-	if (mysql_stmt_fetch(blkdb->btm) != 0)
-		logmsg(LOG_ERR, "No results from query: %s\n",
-				blkdb->blk_query);
-	mysql_stmt_free_result(blkdb->btm);
-	assert(memcmp(txids, blkdb->hdr_hash, SHA_DGST_LEN) == 0);
-	
-exit_10:
+	logmsg(LOG_INFO, "Block %lu verified.\n", blkid);
 	free(txids);
 	return retv;
 }
 
-static unsigned char *tx_blockchain(const struct tx_etoken_in *txin,
-		int *lock_len, ulong64 *val)
-{
-	unsigned char *lock = NULL;
-	const struct etk_block *blk;
-	const struct bl_header *blkhdr;
-	const struct txrec_area *txarea;
-	struct txrec *tx;
-	int tx_idx, numret;
-	struct tx_etoken_out *vout;
-
-	*lock_len = 0;
-	memcpy(txcon.txid, txin->txid, SHA_DGST_LEN);
-	txcon.txid_len = SHA_DGST_LEN;
-	txcon.vout_idx = txin->vout_idx;
-	txcon.blockid = 0;
-	if (mysql_stmt_execute(txcon.utm)) {
-		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",
-				txcon.utxo_query, mysql_stmt_error(txcon.utm));
-		goto exit_10;
-	}
-	if (mysql_stmt_store_result(txcon.utm)) {
-		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",
-				txcon.utxo_query, mysql_stmt_error(txcon.utm));
-		goto exit_10;
-	}
-	numret = 0;
-	while (mysql_stmt_fetch(txcon.utm) != MYSQL_NO_DATA)
-		numret += 1;
-	mysql_stmt_free_result(txcon.utm);
-	if (numret == 0)
-		goto exit_10;
-	assert(numret == 1);
-	if (mysql_stmt_execute(txcon.btm)) {
-		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",
-				txcon.blk_query, mysql_stmt_error(txcon.btm));
-		goto exit_10;
-	}
-	if (mysql_stmt_store_result(txcon.btm)) {
-		logmsg(LOG_ERR, "Statement Execution Failed: %s->%s\n",
-				txcon.blk_query, mysql_stmt_error(txcon.btm));
-		goto exit_10;
-	}
-	numret = 0;
-	while (mysql_stmt_fetch(txcon.btm) != MYSQL_NO_DATA) {
-		numret += 1;
-		assert(txcon.hdrhash_len == SHA_DGST_LEN);
-	}
-	mysql_stmt_free_result(txcon.btm);
-	assert(numret == 1);
-	if (txcon.blklen == 0) {
-		logmsg(LOG_ERR, "Invalid block Retrieved!\n");
-		goto exit_10;
-	}
-	blk = txcon.blkbuf;
-	blkhdr = txcon.blkbuf;
-	txarea = blk->tx_area;
-	tx_idx = 0;
-	while (memcmp(txarea->txhash, txin->txid, SHA_DGST_LEN) != 0 &&
-			tx_idx < blkhdr->numtxs) {
-		txarea = ctxrec_area_next(txarea);
-		tx_idx += 1;
-	}
-	assert(tx_idx < blkhdr->numtxs);
-	tx = tx_deserialize((const char *)txarea->txbuf, txarea->txlen);
-	if (!tx)
-		goto exit_10;
-	assert(txin->vout_idx < tx->vout_num);
-	vout = *(tx->vouts + txin->vout_idx);
-	*val += vout->etk.value;
-	*lock_len = vout->lock_len;
-	lock = malloc(vout->lock_len);
-	if (lock)
-		memcpy(lock, vout->lock, vout->lock_len);
-	tx_destroy(tx);
-
-	block_verify(&txcon);
-
-exit_10:
-	return lock;
-}
-
 int tok_block_init(void)
 {
-	tx_from_blockchain = tx_blockchain;
 	return txdb_con_init(&txcon);
 }
 

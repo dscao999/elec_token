@@ -2,147 +2,356 @@
 #include <mysql.h>
 #include <string.h>
 #include "loglog.h"
-#include "toktx_svr.h"
 #include "virtmach.h"
 #include "global_param.h"
+#include "tok_block.h"
+#include "txpack.h"
 
-#define SCRATCH_LEN     4096
 
-static unsigned char *tx_sales_query(const char *khash, int eid, int *lock_len)
+int txpack_op_init(struct txpack_op *txop, MYSQL *mcon)
 {
-	char *query, *res, *pkhash, *lock;
-	int qsize, mysql_retv, res_count;
-	MYSQL *mcon;
-	MYSQL_STMT *mstmt;
-	MYSQL_BIND pbind[2], rbind[1];
-	unsigned int etok_id = eid;
-	ulong64 blob_len, khash_len;
-	int lsize;
+	static const char utxo_query[] = "SELECT blockid, in_process FROM utxo " \
+					  "WHERE txid = ? AND vout_idx = ? " \
+					  "FOR UPDATE";
+	static const char blk_query[] = "SELECT blockdata, hdr_hash FROM " \
+					"blockchain  WHERE blockid = ?";
+	static const char utxo_update[] = "UPDATE utxo SET in_process = 1 " \
+					   "WHERE txid = ? AND vout_idx = ?";
+	static const char sale_query[] = "SELECT lockscript FROM sales " \
+					  "WHERE keyhash = ? AND etoken_id = ?";
+	int retv = 0;
 
-	qsize = 1024;
-	query = malloc(qsize*2+64);
-	res = query + qsize;
-	pkhash = res + qsize;
-	strcpy(query, "select lockscript from sales " \
-	       	"where keyhash = ? and etoken_id = ?");
+	txop->blkbuf = malloc(g_param->mine.max_blksize);
+	if (!check_pointer(txop->blkbuf))
+		return -ENOMEM;
 
-	mcon = mysql_init(NULL);
-	if (!check_pointer(mcon))
-		return NULL;
-	if (mysql_real_connect(mcon, g_param->db.host, g_param->db.user,
-			g_param->db.passwd, g_param->db.dbname, 0, NULL, 0) == NULL) {
-		logmsg(LOG_ERR, "mysql connect failed: %s\n", mysql_error(mcon));
+	txop->mcon = mcon;
+	txop->utxo_query = utxo_query;
+	txop->uqtm = mysql_stmt_init(mcon);
+	if (!check_pointer(txop->uqtm)) {
+		retv = -ENOMEM;
+		goto err_exit_5;
+	}
+	if (mysql_stmt_prepare(txop->uqtm, txop->utxo_query,
+				strlen(txop->utxo_query))) {
+		logmsg(LOG_ERR, "SQL statement preparation failed: %s->%s\n",
+				txop->utxo_query, mysql_stmt_error(txop->uqtm));
+		retv = -mysql_stmt_errno(txop->uqtm);
 		goto err_exit_10;
 	}
-	mstmt = mysql_stmt_init(mcon);
-	if (!check_pointer(mstmt))
+	memset(txop->mbnd, 0, 2*sizeof(MYSQL_BIND));
+	txop->mbnd[0].buffer_type = MYSQL_TYPE_BLOB;
+	txop->mbnd[0].buffer = txop->txid;
+	txop->mbnd[0].buffer_length = SHA_DGST_LEN;
+	txop->mbnd[0].length = &txop->txid_len;
+	txop->mbnd[1].buffer_type = MYSQL_TYPE_TINY;
+	txop->mbnd[1].buffer = &txop->vout_idx;
+	txop->mbnd[1].is_unsigned = 1;
+	if (mysql_stmt_bind_param(txop->uqtm, txop->mbnd)) {
+		logmsg(LOG_ERR, "SQL Statement bind param failed: %s->%s\n",
+				txop->utxo_query, mysql_stmt_error(txop->uqtm));
+		retv = -mysql_stmt_errno(txop->uqtm);
 		goto err_exit_10;
-	mysql_retv = mysql_stmt_prepare(mstmt, query, strlen(query));
-	if (mysql_retv) {
-		logmsg(LOG_ERR, "Statement preparation failed: %s\n",
-				mysql_stmt_error(mstmt));
-		goto err_exit_20;
 	}
-	strcpy(pkhash, khash);
-	khash_len = strlen(pkhash);
-	memset(pbind, 0, sizeof(pbind));
-	pbind[0].buffer_type = MYSQL_TYPE_STRING;
-	pbind[0].buffer = pkhash;
-	pbind[0].buffer_length = khash_len;
-	pbind[0].length = &khash_len;
-	pbind[1].buffer_type = MYSQL_TYPE_LONG;
-	pbind[1].buffer = &etok_id;
-	pbind[1].is_unsigned = 1;
-	mysql_retv = mysql_stmt_bind_param(mstmt, pbind);
-	if (mysql_retv) {
-		logmsg(LOG_ERR, "mysql_stmt_bind_param failed: %s\n",
-				mysql_stmt_error(mstmt));
-		goto err_exit_20;
-	}
-	memset(rbind, 0, sizeof(rbind));
-	rbind[0].buffer_type = MYSQL_TYPE_BLOB;
-	rbind[0].buffer = res;
-	rbind[0].buffer_length = qsize;
-	rbind[0].length = &blob_len;
-	mysql_retv = mysql_stmt_bind_result(mstmt, rbind);
-	if (mysql_retv) {
-		logmsg(LOG_ERR, "mysql_stmt_bind_result failed: %s\n",
-				mysql_stmt_error(mstmt));
-		goto err_exit_20;
-	}
-	if (mysql_stmt_execute(mstmt)) {
-		logmsg(LOG_ERR, "mysql_execute failed: %s\n", mysql_stmt_error(mstmt));
-		goto err_exit_20;
-	}
-	res_count = 0;
-	*lock_len = 0;
-	lsize = 128;
-	lock = malloc(lsize);
-	while ((mysql_retv = mysql_stmt_fetch(mstmt)) == 0) {
-		if (blob_len > lsize) {
-			lsize = blob_len;
-			lock = realloc(lock, lsize);
-		}
-		memcpy(lock, res, blob_len);
-		*lock_len = blob_len;
-		res_count++;
-	}
-	if (mysql_retv != MYSQL_NO_DATA)
-		logmsg(LOG_ERR, "mysql_stmt_fech failed: data truncated\n");
-	if (res_count > 1)
-		logmsg(LOG_ERR, "More than two lock scripts for %s, " \
-				"use the last one.\n", pkhash);
-	else if (res_count < 1) {
-		free(lock);
-		lock = NULL;
+	memset(txop->rbnd, 0, 2*sizeof(MYSQL_BIND));
+	txop->rbnd[0].buffer_type = MYSQL_TYPE_LONGLONG;
+	txop->rbnd[0].buffer = &txop->blockid;
+	txop->rbnd[0].is_unsigned = 1;
+	txop->rbnd[1].buffer_type = MYSQL_TYPE_TINY;
+	txop->rbnd[1].buffer = &txop->in_process;
+	txop->rbnd[1].is_unsigned = 1;
+	if (mysql_stmt_bind_result(txop->uqtm, txop->rbnd)) {
+		logmsg(LOG_ERR, "SQL Statement bind result failed: %s->%s\n",
+				txop->utxo_query, mysql_stmt_error(txop->uqtm));
+		retv = -mysql_stmt_errno(txop->uqtm);
+		goto err_exit_10;
 	}
 
-	mysql_stmt_close(mstmt);
-	mysql_close(mcon);
-	free(query);
-	return (unsigned char *)lock;
+	txop->blk_query = blk_query;
+	txop->bqtm = mysql_stmt_init(mcon);
+	if (!check_pointer(txop->bqtm)) {
+		retv = -ENOMEM;
+		goto err_exit_10;
+	}
+	if (mysql_stmt_prepare(txop->bqtm, txop->blk_query,
+				strlen(txop->blk_query))) {
+		logmsg(LOG_ERR, "SQL Statement preparation failed: %s->%s\n",
+				txop->blk_query, mysql_stmt_error(txop->bqtm));
+		retv = -mysql_stmt_errno(txop->bqtm);
+		goto err_exit_20;
+	}
+	memset(txop->mbnd, 0, sizeof(MYSQL_BIND));
+	txop->mbnd[0].buffer_type = MYSQL_TYPE_LONGLONG;
+	txop->mbnd[0].buffer = &txop->blockid;
+	txop->mbnd[0].is_unsigned = 1;
+	if (mysql_stmt_bind_param(txop->bqtm, txop->mbnd)) {
+		logmsg(LOG_ERR, "SQL Statement bind param failed: %s->%s\n",
+				txop->blk_query, mysql_stmt_error(txop->bqtm));
+		retv = -mysql_stmt_errno(txop->bqtm);
+		goto err_exit_20;
+	}
+	memset(txop->rbnd, 0, 2*sizeof(MYSQL_BIND));
+	txop->rbnd[0].buffer_type = MYSQL_TYPE_BLOB;
+	txop->rbnd[0].buffer = txop->blkbuf;
+	txop->rbnd[0].buffer_length = g_param->mine.max_blksize;
+	txop->rbnd[0].length = &txop->blk_len;
+	txop->rbnd[1].buffer_type = MYSQL_TYPE_BLOB;
+	txop->rbnd[1].buffer = txop->hdr_hash;
+	txop->rbnd[1].buffer_length = SHA_DGST_LEN;
+	txop->rbnd[1].length = &txop->hdrhash_len;
+	if (mysql_stmt_bind_result(txop->bqtm, txop->rbnd)) {
+		logmsg(LOG_ERR, "SQL Statement bind result failed: %s->%s\n",
+				txop->blk_query, mysql_stmt_error(txop->bqtm));
+		retv = -mysql_stmt_errno(txop->bqtm);
+		goto err_exit_20;
+	}
 
+	txop->utxo_update = utxo_update;
+	txop->uutm = mysql_stmt_init(mcon);
+	if (!check_pointer(txop->uutm)) {
+		retv = -ENOMEM;
+		goto err_exit_20;
+	}
+	if (mysql_stmt_prepare(txop->uutm, txop->utxo_update,
+				strlen(txop->utxo_update))) {
+		logmsg(LOG_ERR, "SQL Statement preparation failed: %s->%s\n",
+				txop->utxo_update, mysql_stmt_error(txop->uutm));
+		retv = -mysql_stmt_errno(txop->uutm);
+		goto err_exit_30;
+	}
+	memset(txop->mbnd, 0, 2*sizeof(MYSQL_BIND));
+	txop->mbnd[0].buffer_type = MYSQL_TYPE_BLOB;
+	txop->mbnd[0].buffer = txop->txid;
+	txop->mbnd[0].buffer_length = SHA_DGST_LEN;
+	txop->mbnd[0].length = &txop->txid_len;
+	txop->mbnd[1].buffer_type = MYSQL_TYPE_TINY;
+	txop->mbnd[1].buffer = &txop->vout_idx;
+	txop->mbnd[1].is_unsigned = 1;
+	if (mysql_stmt_bind_param(txop->uutm, txop->mbnd)) {
+		logmsg(LOG_ERR, "SQL Statement bind param failed: %s->%s\n",
+				txop->utxo_update, mysql_stmt_error(txop->uutm));
+		retv = -mysql_stmt_errno(txop->uutm);
+		goto err_exit_30;
+	}
+
+	txop->sale_query = sale_query;
+	txop->sqtm = mysql_stmt_init(mcon);
+	if (!check_pointer(txop->sqtm)) {
+		retv = -ENOMEM;
+		goto err_exit_30;
+	}
+	if (mysql_stmt_prepare(txop->sqtm, txop->sale_query,
+				strlen(txop->sale_query))) {
+		logmsg(LOG_ERR, "SQL Statement preparation failed: %s->%s\n",
+				txop->sale_query, mysql_stmt_error(txop->sqtm));
+		retv = -mysql_stmt_errno(txop->sqtm);
+		goto err_exit_40;
+	}
+	memset(txop->mbnd, 0, 2*sizeof(MYSQL_BIND));
+	txop->mbnd[0].buffer_type = MYSQL_TYPE_BLOB;
+	txop->mbnd[0].buffer = txop->txid;
+	txop->mbnd[0].buffer_length = SHA_DGST_LEN;
+	txop->mbnd[0].length = &txop->txid_len;
+	txop->mbnd[1].buffer_type = MYSQL_TYPE_LONG;
+	txop->mbnd[1].buffer = &txop->etoken_id;
+	txop->mbnd[1].is_unsigned = 1;
+	if (mysql_stmt_bind_param(txop->sqtm, txop->mbnd)) {
+		logmsg(LOG_ERR, "SQL Statement bind param failed: %s->%s\n",
+				txop->sale_query, mysql_stmt_error(txop->sqtm));
+		retv = -mysql_stmt_errno(txop->sqtm);
+		goto err_exit_40;
+	}
+	memset(txop->rbnd, 0, sizeof(MYSQL_BIND));
+	txop->rbnd[0].buffer_type = MYSQL_TYPE_BLOB;
+	txop->rbnd[0].buffer = txop->blkbuf;
+	txop->rbnd[0].buffer_length = g_param->mine.max_blksize;
+	txop->rbnd[0].length = &txop->blk_len;
+	if (mysql_stmt_bind_result(txop->sqtm, txop->rbnd)) {
+		logmsg(LOG_ERR, "SQL Statement bind result failed: %s->%s\n",
+				txop->sale_query, mysql_stmt_error(txop->sqtm));
+		retv = -mysql_stmt_errno(txop->sqtm);
+		goto err_exit_40;
+	}
+
+	return retv;
+
+err_exit_40:
+	mysql_stmt_close(txop->sqtm);
+err_exit_30:
+	mysql_stmt_close(txop->uutm);
 err_exit_20:
-	mysql_stmt_close(mstmt);
+	mysql_stmt_close(txop->bqtm);
 err_exit_10:
-	mysql_close(mcon);
-	free(query);
-	return NULL;
+	mysql_stmt_close(txop->uqtm);
+err_exit_5:
+	free(txop->blkbuf);
+	return retv;
 }
 
-static unsigned char *tx_vin_getlock(const struct tx_etoken_in *txin, int eid,
-		int *lock_len, ulong64 *val)
+static int tx_getlock(const struct tx_etoken_in *txin, struct txpack_op *txop)
+{
+	const struct etk_block *blk;
+	const struct bl_header *blkhdr;
+	const struct txrec_area *txarea;
+	struct txrec *tx;
+	int tx_idx, numret, retv = 0, i;
+	struct tx_etoken_out *vout;
+
+	txop->value = 0;
+	txop->lock = NULL;
+	txop->lock_len = 0;
+	txop->blockid = 0;
+	memcpy(txop->txid, txin->txid, SHA_DGST_LEN);
+	txop->txid_len = SHA_DGST_LEN;
+	txop->vout_idx = txin->vout_idx;
+	if (mysql_stmt_execute(txop->uqtm)) {
+		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",
+				txop->utxo_query, mysql_stmt_error(txop->uqtm));
+		retv = -mysql_stmt_errno(txop->uqtm);
+		goto exit_10;
+	}
+	if (mysql_stmt_store_result(txop->uqtm)) {
+		logmsg(LOG_ERR, "Statement Store Result failed: %s->%s\n",
+				txop->utxo_query, mysql_stmt_error(txop->uqtm));
+		retv = -mysql_stmt_errno(txop->uqtm);
+		goto exit_10;
+	}
+	numret = 0;
+	while (mysql_stmt_fetch(txop->uqtm) != MYSQL_NO_DATA) {
+		if (txop->blockid > 1 && txop->in_process == 0)
+			numret += 1;
+	}
+	mysql_stmt_free_result(txop->uqtm);
+	if (numret == 0) {
+		logmsg(LOG_ERR, "Not such utxo as vout: %d and txid: ",
+				txop->vout_idx);
+		for (i = 0; i < SHA_DGST_LEN; i++)
+			logmsg(LOG_ERR, "%02hhX ", txop->txid[i]);
+		logmsg(LOG_ERR, "\n");
+		retv = -1;
+		goto exit_10;
+	}
+	assert(numret == 1);
+	if (mysql_stmt_execute(txop->uutm)) {
+		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",
+				txop->utxo_update, mysql_stmt_error(txop->uutm));
+		retv = -mysql_stmt_errno(txop->uutm);
+		goto exit_10;
+	}
+	if (mysql_stmt_execute(txop->bqtm)) {
+		logmsg(LOG_ERR, "Statement Execution failed: %s->%s\n",
+				txop->blk_query, mysql_stmt_error(txop->bqtm));
+		retv = -mysql_stmt_errno(txop->bqtm);
+		goto exit_10;
+	}
+	if (mysql_stmt_store_result(txop->bqtm)) {
+		logmsg(LOG_ERR, "Statement Execution Failed: %s->%s\n",
+				txop->blk_query, mysql_stmt_error(txop->bqtm));
+		retv = -mysql_stmt_errno(txop->bqtm);
+		goto exit_10;
+	}
+	numret = 0;
+	while (mysql_stmt_fetch(txop->bqtm) != MYSQL_NO_DATA) {
+		numret += 1;
+		assert(txop->hdrhash_len == SHA_DGST_LEN);
+	}
+	mysql_stmt_free_result(txop->bqtm);
+	assert(numret == 1);
+	if (txop->blk_len == 0) {
+		logmsg(LOG_ERR, "Invalid block Retrieved!\n");
+		retv = -2;
+		goto exit_10;
+	}
+	blk = txop->blkbuf;
+	blkhdr = txop->blkbuf;
+	txarea = blk->tx_area;
+	tx_idx = 0;
+	while (memcmp(txarea->txhash, txin->txid, SHA_DGST_LEN) != 0 &&
+			tx_idx < blkhdr->numtxs) {
+		txarea = ctxrec_area_next(txarea);
+		tx_idx += 1;
+	}
+	assert(tx_idx < blkhdr->numtxs);
+	tx = tx_deserialize((const char *)txarea->txbuf, txarea->txlen);
+	if (!tx)
+		goto exit_10;
+	assert(txin->vout_idx < tx->vout_num);
+	vout = *(tx->vouts + txin->vout_idx);
+	txop->value = vout->etk.value;
+	txop->lock_len = vout->lock_len;
+	txop->lock = malloc(vout->lock_len);
+	if (check_pointer(txop->lock))
+		memcpy(txop->lock, vout->lock, vout->lock_len);
+	tx_destroy(tx);
+
+	block_verify(txop->blkbuf, txop->blk_len, txop->blockid);
+
+exit_10:
+	return retv;
+}
+
+static int tx_sales_query(const char *khash, int eid, struct txpack_op *txop)
+{
+	int retv = 0;
+
+	txop->lock = NULL;
+	txop->lock_len = 0;
+
+	strcpy((char *)txop->txid, khash);
+	txop->txid_len = strlen(khash);
+	txop->etoken_id = eid;
+	txop->blk_len = 0;
+	if (mysql_stmt_execute(txop->sqtm)) {
+		logmsg(LOG_ERR, "Statement execution failed: %s->%s\n",
+				txop->sale_query, mysql_stmt_error(txop->sqtm));
+		retv = -mysql_stmt_errno(txop->sqtm);
+		goto exit_10;
+	}
+	if (mysql_stmt_store_result(txop->sqtm)) {
+		logmsg(LOG_ERR, "Statement store result failed: %s->%s\n",
+				txop->sale_query, mysql_stmt_error(txop->sqtm));
+		retv = -mysql_stmt_errno(txop->sqtm);
+		goto exit_10;
+	}
+
+	if (mysql_stmt_fetch(txop->sqtm) != MYSQL_NO_DATA) {
+		assert(txop->blk_len != 0);
+		txop->lock = malloc(txop->blk_len);
+		if (check_pointer(txop->lock)) {
+			txop->lock_len = txop->blk_len;
+			memcpy(txop->lock, txop->blkbuf, txop->lock_len);
+		}
+	}
+	mysql_stmt_free_result(txop->sqtm);
+
+exit_10:
+	return retv;
+}
+
+static int tx_vin_getlock(const struct tx_etoken_in *txin,
+		unsigned int eid, struct txpack_op *txop)
 {
 	struct ecc_key ekey;
 	char khash[32];
 	int len;
-	unsigned char *lock;
 
-	*lock_len = 0;
-	if (txin->gensis != 0x0ff) {
-		if (tx_from_blockchain)
-			return tx_from_blockchain(txin, lock_len, val);
-		else
-			return NULL;
-	}
+	if (txin->gensis != 0x0ff)
+		return tx_getlock(txin, txop);
 
-	*val = 0xfffffffffffffffful;
 	memcpy(ekey.px, txin->txid, SHA_DGST_LEN);
 	ecc_get_public_y(&ekey, txin->odd);
 	len = ecc_key_hash(khash, 32, &ekey);
 	khash[len] = 0;
-	lock = tx_sales_query(khash, eid, lock_len);
-	return lock;
+	return tx_sales_query(khash, eid, txop);
 }
 
-int tx_verify(const unsigned char *txrec, int len)
+int tx_verify(const unsigned char *txrec, int len, struct txpack_op *txop)
 {
-	int i, lock_len, suc, retv;
+	int i, suc, retv;
 	const struct tx_etoken_in *txin, **txins;
 	const struct tx_etoken_out *txout, **txouts;
 	const struct etoken *petk;
-	unsigned char *lock = NULL;
-	ulong64 out_val = 0, in_val = 0;
+	unsigned long out_val = 0, in_val = 0;
 	struct vmach *vm;
 	struct txrec *tx;
 
@@ -159,10 +368,12 @@ int tx_verify(const unsigned char *txrec, int len)
 			return suc;
 		out_val += txout->etk.value;
 	}
-
-	suc = 1;
 	vm = vmach_init();
+	if (!check_pointer(vm))
+		goto exit_10;
+
 	txins = (const struct tx_etoken_in **)tx->vins;
+	suc = 1;
 	for(i = 0; i < tx->vin_num; i++, txins++) {
 		txin = *txins;
 		retv = vmach_execute(vm, txin->unlock, txin->unlock_len, NULL, 0);
@@ -170,64 +381,27 @@ int tx_verify(const unsigned char *txrec, int len)
 			suc = 0;
 			break;
 		}
-		lock = tx_vin_getlock(txin, petk->token_id, &lock_len, &in_val);
-		if (!lock) {
+		retv = tx_vin_getlock(txin, petk->token_id, txop);
+		in_val += txop->value;
+		if (!txop->lock) {
 		       	if (vmach_success(vm))
 				continue;
 			suc = 0;
 			break;
 		}
-		retv = vmach_execute(vm, lock, lock_len, txrec, len);
-		free(lock);
+		retv = vmach_execute(vm, txop->lock, txop->lock_len, txrec, len);
+		free(txop->lock);
 		if (retv <= 0 || (!vmach_stack_empty(vm) &&
 					!vmach_success(vm))) {
 			suc = 0;
 			break;
 		}
 	}
-
-	vmach_exit(vm);
 	if (in_val < out_val)
 		suc = 0;
+
+	vmach_exit(vm);
+exit_10:
+	tx_destroy(tx);
 	return suc;
-}
-
-static void tx_get_vout_owner(unsigned char *owner, const unsigned char *lock,
-		int lock_len)
-{
-	const unsigned char *opcode;
-       	unsigned char opc;
-
-	opcode = lock;
-	while (opcode - lock < lock_len) {
-		opc = *opcode++;
-		if (opc != OP_DUP)
-			continue;
-		opc = *opcode++;
-		if (opc != OP_RIPEMD160)
-			continue;
-		break;
-	}
-	if ((int)(opcode - lock) + RIPEMD_LEN + 1 <= lock_len) {
-		assert(*opcode == RIPEMD_LEN);
-		memcpy(owner, opcode+1, RIPEMD_LEN);
-	} else
-		memset(owner, 0, RIPEMD_LEN);
-}
-
-int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo)
-{
-	const struct tx_etoken_out *vout;
-
-	if (vo->vout_idx >= tx->vout_num)
-		return 0;
-	vout = *(tx->vouts + vo->vout_idx);
-	vo->eid = vout->etk.token_id;
-	vo->value = vout->etk.value;
-	if (vout->lock_len == 0)
-		memset(vo->owner, 0, RIPEMD_LEN);
-	else
-		tx_get_vout_owner(vo->owner, vout->lock, vout->lock_len);
-
-	return 1;
 }

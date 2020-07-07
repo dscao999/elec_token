@@ -2,11 +2,14 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <string.h>
+#include <my_global.h>
+#include <mysql.h>
 #include "global_param.h"
 #include "loglog.h"
 #include "ecc_secp256k1.h"
-#include "toktx_svr.h"
-#include "alsarec.h"
+#include "toktx.h"
+#include "txpack.h"
 
 unsigned char *(*tx_from_blockchain)(const struct tx_etoken_in *txin,
 		int *lock_len, ulong64 *val) = NULL;
@@ -16,28 +19,35 @@ struct txrec *tx_read(const char *fname);
 
 int main(int argc, char *argv[])
 {
-	const char *payto, *prkey, *fname, *ofname;
+	const char *payto, *prkey, *fname, *ofname, *cnf;
 	struct ecc_key ekey;
 	struct txrec *tx;
-	int verify = 0;
+	int verify = 0, retv;
 	int mark, fin, value, token, import = 0;
 	char *buf;
 	int txlen;
+	struct txpack_op *txop;
+	MYSQL *mcon;
 	extern char *optarg;
 	extern int opterr, optopt;
 
+	txop = malloc(sizeof(struct txpack_op));
 	buf = malloc(4096);
 	opterr = 0;
 	payto = NULL;
 	prkey = NULL;
 	fname = NULL;
 	ofname = NULL;
+	cnf = NULL;
 	value = 0;
 	token = 0;
 	fin = 0;
 	do {
-		mark = getopt(argc, argv, ":f:k:h:v:n:mro:");
+		mark = getopt(argc, argv, ":f:k:h:v:n:mro:c:");
 		switch(mark) {
+		case 'c':
+			cnf = optarg;
+			break;
 		case 'o':
 			ofname = optarg;
 			break;
@@ -76,11 +86,26 @@ int main(int argc, char *argv[])
 			assert(0);
 		}
 	} while (fin == 0);
-	global_param_init(NULL);
+	global_param_init(cnf);
 	if ((!payto || !prkey) && import == 0) {
 		logmsg(LOG_ERR, "no key, or no receipient!\n");
 		return 1;
 	}
+	mcon = mysql_init(NULL);
+	if (!check_pointer(mcon)) {
+		retv = ENOMEM;
+		goto exit_10;
+	}
+	if (mysql_real_connect(mcon, g_param->db.host, g_param->db.user,
+				g_param->db.passwd, g_param->db.dbname, 0,
+				NULL, 0) == NULL) {
+		retv = mysql_errno(mcon);
+		logmsg(LOG_ERR, "Cannot connect to DB: %s\n",
+				mysql_error(mcon));
+		goto exit_20;
+	}
+	txpack_op_init(txop, mcon);
+
 	if (value == 0)
 		value = 1010;
 	if (token == 0)
@@ -102,7 +127,7 @@ int main(int argc, char *argv[])
 		tx = tx_read(fname);
 		txlen = tx_serialize(buf, 4096, tx, 1);
 		if (verify) {
-			if (!tx_verify((unsigned char *)buf, txlen))
+			if (!tx_verify((unsigned char *)buf, txlen, txop))
 				logmsg(LOG_ERR, "Invalid transaction.\n");
 			else
 				logmsg(LOG_INFO, "Valid transaction.\n");
@@ -112,8 +137,13 @@ int main(int argc, char *argv[])
 	}
 
 	tx_destroy(tx);
+
+exit_20:
+	mysql_close(mcon);
+exit_10:
 	free(buf);
-	return 0;
+	free(txop);
+	return retv;
 }
 
 void save_tx(const char *fname, const struct txrec *tx)

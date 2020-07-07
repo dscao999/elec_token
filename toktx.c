@@ -591,3 +591,43 @@ int tx_trans_end(char *buf, int buflen, ulong64 txptr)
 		tx_destroy(tx);
 	return len;
 }
+
+static void tx_get_vout_owner(unsigned char *owner, const unsigned char *lock,
+		int lock_len)
+{
+	const unsigned char *opcode;
+       	unsigned char opc;
+
+	opcode = lock;
+	while (opcode - lock < lock_len) {
+		opc = *opcode++;
+		if (opc != OP_DUP)
+			continue;
+		opc = *opcode++;
+		if (opc != OP_RIPEMD160)
+			continue;
+		break;
+	}
+	if ((int)(opcode - lock) + RIPEMD_LEN + 1 <= lock_len) {
+		assert(*opcode == RIPEMD_LEN);
+		memcpy(owner, opcode+1, RIPEMD_LEN);
+	} else
+		memset(owner, 0, RIPEMD_LEN);
+}
+
+int tx_get_vout(const struct txrec *tx, struct txrec_vout *vo)
+{
+	const struct tx_etoken_out *vout;
+
+	if (vo->vout_idx >= tx->vout_num)
+		return 0;
+	vout = *(tx->vouts + vo->vout_idx);
+	vo->eid = vout->etk.token_id;
+	vo->value = vout->etk.value;
+	if (vout->lock_len == 0)
+		memset(vo->owner, 0, RIPEMD_LEN);
+	else
+		tx_get_vout_owner(vo->owner, vout->lock, vout->lock_len);
+
+	return 1;
+}

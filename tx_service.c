@@ -18,10 +18,11 @@
 #include <mysqld_error.h>
 #include "global_param.h"
 #include "loglog.h"
+#include "sha256.h"
+#include "ripemd160.h"
 #include "wcomm.h"
-#include "toktx.h"
 #include "base64.h"
-#include "tok_block.h"
+#include "txpack.h"
 
 static volatile int global_exit = 0;
 
@@ -58,6 +59,7 @@ struct txrec_info {
 	MYSQL_STMT *imt;
 	struct tokid_info tokq;
 	struct utxo_info utxo;
+	struct txpack_op txop;
 	MYSQL_BIND mbnd[3], rbnd[3];
 	unsigned long txrec_len;
 	struct wpacket wpkt;
@@ -270,6 +272,7 @@ err_exit_10:
 
 static void txrec_info_release(struct txrec_info *txp)
 {
+	txpack_op_release(&txp->txop);
 	mysql_stmt_close(txp->imt);
 	tokid_info_release(txp);
 	utxo_info_release(txp);
@@ -331,7 +334,8 @@ static int txrec_info_init(struct txrec_info *txp, struct winfo *wif)
 		retv = -mysql_stmt_errno(txp->imt);
 		goto err_exit_40;
 	}
-
+	if (txpack_op_init(&txp->txop, txp->mcon) != 0)
+		goto err_exit_40;
 
 	return retv;
 
@@ -359,9 +363,16 @@ static int txrec_verify(int sock, const struct winfo *wif,
 		logmsg(LOG_WARNING, "/tmp/txrec-ser.dat write failed.\n");
 	fclose(fout);
 
-	suc = tx_verify((const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
-	if (suc == 0)
+	suc = 0;
+	if (mysql_query(txp->mcon, "START TRANSACTION")) {
+		logmsg(LOG_ERR, "Cannot START TRANSACTION: %s\n",
+				mysql_error(txp->mcon));
 		goto exit_10;
+	}
+	suc = tx_verify((const unsigned char *)wif->wpkt.pkt, wif->wpkt.len,
+			&txp->txop);
+	if (suc == 0)
+		goto exit_20;
 
 	sha256_dgst_2str((unsigned char *)txp->utxo.txid,
 			(const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
@@ -378,6 +389,16 @@ static int txrec_verify(int sock, const struct winfo *wif,
 		}
 	}
 
+exit_20:
+	if (suc > 0) {
+		if (mysql_query(txp->mcon, "COMMIT"))
+			logmsg(LOG_ERR, "COMMIT failed: %s\n",
+					mysql_error(txp->mcon));
+	} else {
+		if (mysql_query(txp->mcon, "ROLLBACK"))
+			logmsg(LOG_ERR, "ROLLBACK failed: %s\n",
+					mysql_error(txp->mcon));
+	}
 exit_10:
 	txp->wpkt.ptype = suc;
 	printf("Verified Result: %d\n", suc);
@@ -703,10 +724,10 @@ void *tx_process(void *arg)
 	struct winfo *wif;
 	struct txrec_info *txp;
 
-	wif = malloc(2*MAX_TXSIZE+sizeof(struct txrec_info));
+	wif = malloc(2*g_param->tx.max_txsize+sizeof(struct txrec_info));
 	if (!check_pointer(wif))
 		return NULL;
-	txp= (struct txrec_info *)(((unsigned char *)wif) + MAX_TXSIZE);
+	txp= (struct txrec_info *)(((unsigned char *)wif) + g_param->tx.max_txsize);
 	if (txrec_info_init(txp, wif) != 0)
 		goto exit_5;
 
@@ -859,10 +880,6 @@ int main(int argc, char *argv[])
 	else
 		conf = "/etc/etoken.conf";
 	global_param_init(conf);
-	if (tok_block_init() != 0) {
-		logmsg(LOG_ERR, "Cannot Initialize Blockchain.\n");
-		exit(10);
-	}
 	wm = wcomm_init();
 	if (!wm) {
 		global_param_exit();
@@ -902,7 +919,6 @@ int main(int argc, char *argv[])
 
 exit_10:
 	wcomm_exit(wm);
-	tok_block_exit();
 	global_param_exit();
 	return retv;
 }
