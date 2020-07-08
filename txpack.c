@@ -323,6 +323,7 @@ static int tx_sales_query(const char *khash, int eid, struct txpack_op *txop)
 		}
 	}
 	mysql_stmt_free_result(txop->sqtm);
+	txop->value = 0xfffffffffffffffful;
 
 exit_10:
 	return retv;
@@ -347,18 +348,23 @@ static int tx_vin_getlock(const struct tx_etoken_in *txin,
 
 int tx_verify(const unsigned char *txrec, int len, struct txpack_op *txop)
 {
-	int i, suc, retv;
+	int i, suc, retv, txbuf_len;
 	const struct tx_etoken_in *txin, **txins;
 	const struct tx_etoken_out *txout, **txouts;
 	const struct etoken *petk;
 	unsigned long out_val = 0, in_val = 0;
 	struct vmach *vm;
 	struct txrec *tx;
+	char *txbuf;
 
 	suc = 0;
 	tx = tx_deserialize((const char *)txrec, len);
 	if (tx == NULL)
 		return suc;
+
+	txbuf = malloc(g_param->tx.max_txsize);
+	if (!check_pointer(txbuf))
+		goto exit_10;
 
 	txouts = (const struct tx_etoken_out **)tx->vouts;
 	petk = &(*txouts)->etk;
@@ -370,13 +376,15 @@ int tx_verify(const unsigned char *txrec, int len, struct txpack_op *txop)
 	}
 	vm = vmach_init();
 	if (!check_pointer(vm))
-		goto exit_10;
+		goto exit_20;
 
+	txbuf_len = tx_serialize(txbuf, g_param->tx.max_txsize, tx, 0);
 	txins = (const struct tx_etoken_in **)tx->vins;
 	suc = 1;
 	for(i = 0; i < tx->vin_num; i++, txins++) {
 		txin = *txins;
-		retv = vmach_execute(vm, txin->unlock, txin->unlock_len, NULL, 0);
+		retv = vmach_execute(vm, txin->unlock, txin->unlock_len,
+				NULL, 0);
 		if (retv <= 0) {
 			suc = 0;
 			break;
@@ -389,7 +397,8 @@ int tx_verify(const unsigned char *txrec, int len, struct txpack_op *txop)
 			suc = 0;
 			break;
 		}
-		retv = vmach_execute(vm, txop->lock, txop->lock_len, txrec, len);
+		retv = vmach_execute(vm, txop->lock, txop->lock_len,
+				(const unsigned char *)txbuf, txbuf_len);
 		free(txop->lock);
 		if (retv <= 0 || (!vmach_stack_empty(vm) &&
 					!vmach_success(vm))) {
@@ -401,6 +410,8 @@ int tx_verify(const unsigned char *txrec, int len, struct txpack_op *txop)
 		suc = 0;
 
 	vmach_exit(vm);
+exit_20:
+	free(txbuf);
 exit_10:
 	tx_destroy(tx);
 	return suc;
