@@ -284,8 +284,6 @@ static int tx_getlock(const struct tx_etoken_in *txin, struct txpack_op *txop)
 		memcpy(txop->lock, vout->lock, vout->lock_len);
 	tx_destroy(tx);
 
-	block_verify(txop->blkbuf, txop->blk_len, txop->blockid);
-
 exit_10:
 	return retv;
 }
@@ -294,6 +292,7 @@ static int tx_sales_query(const char *khash, int eid, struct txpack_op *txop)
 {
 	int retv = 0;
 
+	txop->value = 0;
 	txop->lock = NULL;
 	txop->lock_len = 0;
 
@@ -316,6 +315,7 @@ static int tx_sales_query(const char *khash, int eid, struct txpack_op *txop)
 
 	if (mysql_stmt_fetch(txop->sqtm) != MYSQL_NO_DATA) {
 		assert(txop->blk_len != 0);
+		txop->value = 0xfffffffffffffffful;
 		txop->lock = malloc(txop->blk_len);
 		if (check_pointer(txop->lock)) {
 			txop->lock_len = txop->blk_len;
@@ -323,7 +323,6 @@ static int tx_sales_query(const char *khash, int eid, struct txpack_op *txop)
 		}
 	}
 	mysql_stmt_free_result(txop->sqtm);
-	txop->value = 0xfffffffffffffffful;
 
 exit_10:
 	return retv;
