@@ -9,7 +9,7 @@
 #include "loglog.h"
 #include "ecc_secp256k1.h"
 #include "toktx.h"
-#include "txpack.h"
+#include "txcheck.h"
 
 unsigned char *(*tx_from_blockchain)(const struct tx_etoken_in *txin,
 		int *lock_len, ulong64 *val) = NULL;

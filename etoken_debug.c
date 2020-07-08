@@ -3,7 +3,7 @@
 #include <my_global.h>
 #include <mysql.h>
 #include "toktx.h"
-#include "txpack.h"
+#include "txcheck.h"
 #include "global_param.h"
 
 int main(int argc, char *argv[])

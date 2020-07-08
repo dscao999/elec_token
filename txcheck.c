@@ -5,7 +5,7 @@
 #include "virtmach.h"
 #include "global_param.h"
 #include "tok_block.h"
-#include "txpack.h"
+#include "txcheck.h"
 
 
 int txpack_op_init(struct txpack_op *txop, MYSQL *mcon)

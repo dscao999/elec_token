@@ -22,7 +22,7 @@
 #include "ripemd160.h"
 #include "wcomm.h"
 #include "base64.h"
-#include "txpack.h"
+#include "txcheck.h"
 
 static volatile int global_exit = 0;
 
