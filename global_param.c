@@ -89,7 +89,7 @@ void set_param(const ini_entry_t *pent)
 		set_tx_param(pent);
 	else if (strcmp(pent->section, "blockchain") == 0)
 		set_blockchain(pent);
-	else if (strcmp(pent->section, "global") == 0)
+	else if (strcmp(pent->section, "client") == 0)
 		;
 	else
 		logmsg(LOG_WARNING, "Unknown Section: %s\n", pent->section);
