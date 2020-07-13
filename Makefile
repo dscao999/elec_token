@@ -18,11 +18,11 @@ genblk: genblock.o tok_block.o global_param.o ezini.o toktx.o tokens.o virtmach.
 toktx: txtokens.o toktx.o tokens.o txcheck.o virtmach.o global_param.o ezini.o tok_block.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 
-tx_service: tx_service.o toktx.o tokens.o virtmach.o txcheck.o global_param.o ezini.o \
+tx_service: tx_service.o toktx.o tokens.o virtmach.o txcheck.o db_probe.o global_param.o ezini.o \
 	wcomm.o tok_block.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 
-tx_logging: tx_logging.o tok_block.o toktx.o global_param.o ezini.o virtmach.o \
+tx_logging: tx_logging.o tok_block.o toktx.o global_param.o ezini.o virtmach.o db_probe.o \
 	tokens.o $(eccobj)
 	$(LINK.o) $^ $(DBLIB) -lgmp -o $@
 

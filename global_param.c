@@ -15,7 +15,8 @@ static struct global_param all_param = {
 		.host = "localhost",
 		.dbname = "electoken",
 		.user = "dscao",
-		.passwd = ""
+		.passwd = "",
+		.probe = 30
 	},
 	.netp = {
 		.port = 6001
@@ -62,6 +63,8 @@ void set_db(const ini_entry_t *pent)
 		strcpy(all_param.db.dbname, pent->value);
 	else if (strcmp(pent->key, "passwd") == 0)
 		strcpy(all_param.db.passwd, pent->value);
+	else if (strcmp(pent->key, "probe") == 0)
+		all_param.db.probe = atoi(pent->value);
 	else
 		logmsg(LOG_WARNING, "Unknown Key: %s in Section db\n",
 				pent->key);

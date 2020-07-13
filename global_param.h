@@ -5,6 +5,7 @@ struct db_param {
 	char passwd[32];
 	char user[16];
 	char dbname[16];
+	int probe;
 };
 
 struct net_param {

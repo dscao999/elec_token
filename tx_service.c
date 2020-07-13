@@ -23,6 +23,7 @@
 #include "wcomm.h"
 #include "base64.h"
 #include "txcheck.h"
+#include "db_probe.h"
 
 static volatile int global_exit = 0;
 
@@ -718,11 +719,12 @@ static inline int notify_tx_logging(int pipd)
 void *tx_process(void *arg)
 {
 	struct wcomm *wm = arg;
-	int rc, verified;
-	struct timespec tm;
+	int rc, verified, secs;
+	struct timespec tm, pbtm;
 	const struct winfo *cwif;
 	struct winfo *wif;
 	struct txrec_info *txp;
+	int pret;
 
 	wif = malloc(2*g_param->tx.max_txsize+sizeof(struct txrec_info));
 	if (!check_pointer(wif))
@@ -731,15 +733,26 @@ void *tx_process(void *arg)
 	if (txrec_info_init(txp, wif) != 0)
 		goto exit_5;
 
+	pbtm.tv_sec = 0;
 	do {
 		pthread_mutex_lock(&wm->wmtx);
 		clock_gettime(CLOCK_REALTIME, &tm);
 		tm.tv_sec += 1;
 		rc = 0;
+		secs = 0;
 		while (global_exit == 0 && wcomm_empty(wm) &&
 				(rc == 0 || rc == ETIMEDOUT)) {
 			rc = pthread_cond_timedwait(&wm->wcd, &wm->wmtx, &tm);
 			tm.tv_sec += 1;
+			if (rc == ETIMEDOUT) {
+				secs += 1;
+				if (secs >= g_param->db.probe) {
+					secs = 0;
+					pret = check_db_probe(txp->mcon, &pbtm);
+					if (pret < 0)
+						global_exit = 1;
+				}
+			}
 		}
 		if (unlikely(rc != 0 && rc != ETIMEDOUT)) {
 			logmsg(LOG_ERR, "pthread_cond_timedwait failed: %s\n",

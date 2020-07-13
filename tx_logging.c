@@ -9,6 +9,7 @@
 #include "loglog.h"
 #include "global_param.h"
 #include "tok_block.h"
+#include "db_probe.h"
 
 static volatile int global_exit = 0;
 static volatile int tx_service_changed = 0;
@@ -775,9 +776,9 @@ static int check_tx_service(pid_t chldpid)
 
 static const int max_secs = 60;
 
-static int wait_for_txs(int pipd)
+static int wait_for_txs(int pipd, struct timespec *tm0, MYSQL *mcon)
 {
-	int txs, pingpong, numb, secs;
+	int txs, pingpong, numb, secs, pret, idle;
 	struct timespec intvl;
 
 	intvl.tv_sec = 1;
@@ -790,8 +791,17 @@ static int wait_for_txs(int pipd)
 			return numb;
 		}
 		nanosleep(&intvl, NULL);
+		if (numb == -1 && errno == EAGAIN) {
+			idle += 1;
+			if (idle > g_param->db.probe) {
+				idle = 0;
+				pret = check_db_probe(mcon, tm0);
+				if (pret < 0)
+					global_exit = 1;
+			}
+		}
 	} while (numb == -1 && errno == EAGAIN && global_exit == 0);
-	if (numb == -1 && errno != EAGAIN) {
+	if ((numb == -1 && errno != EAGAIN) || global_exit != 0) {
 		if (errno != EINTR)
 			logmsg(LOG_ERR, "Read pipe failed: %s\n",
 					strerror(errno));
@@ -800,8 +810,6 @@ static int wait_for_txs(int pipd)
 	txs += 1;
 	secs = 0;
 	do {
-		if (secs == max_secs)
-			break;
 		nanosleep(&intvl, NULL);
 		numb = read(pipd, &pingpong, sizeof(pingpong));
 		if (numb == 0) {
@@ -810,14 +818,12 @@ static int wait_for_txs(int pipd)
 		} else if (numb > 0)
 			txs += 1;
 		secs += 1;
-	} while (txs < 10);
+	} while (txs < 10 && secs < max_secs && global_exit == 0);
 	if (numb == -1 && errno != EAGAIN) {
 		if (errno != EINTR)
 			logmsg(LOG_ERR, "Read pipe failed: %s\n",
 					strerror(errno));
-		return numb;
 	}
-
 	return txs;
 }
 
@@ -829,7 +835,7 @@ int main(int argc, char *argv[])
 	volatile int fin;
 	int i, elapsed, pipd;
 	pid_t tx_svc_pid;
-	struct timespec intvl;
+	struct timespec intvl, pbtm;
 	const char *conf;
 
 	if (argc > 1)
@@ -872,11 +878,12 @@ int main(int argc, char *argv[])
 		goto exit_10;
 	}
 
+	pbtm.tv_sec = 0;
 	intvl.tv_sec = 0;
 	intvl.tv_nsec = 100000000;
 	do {
 		printf("Last block ID: %lu\n", dbinfo->blkdb->blkid);
-		retv = wait_for_txs(pipd);
+		retv = wait_for_txs(pipd, &pbtm, dbinfo->mcon);
 		if (retv == 0) {
 			while (tx_service_changed == 0)
 				nanosleep(&intvl, NULL);
@@ -886,7 +893,8 @@ int main(int argc, char *argv[])
 				global_exit = 1;
 			 else if (global_exit == 0) {
 				 close(pipd);
-				 pipd = spawn_tx_service(tx_service, &tx_svc_pid, conf);
+				 pipd = spawn_tx_service(tx_service,
+						 &tx_svc_pid, conf);
 				 if (pipd == -1)
 					 global_exit = 1;
 			 }
