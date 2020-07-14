@@ -569,8 +569,6 @@ int tx_trans_sign(ulong64 txptr, unsigned char *buf, int buflen,
 	struct txrec *tx = (struct txrec *)txptr;
 	int retv = 0;
 
-	printf("%s: vin: %d, vout: %d\n", __FUNCTION__, tx->vin_num, tx->vout_num);
-	printf("VIN idx: %d\n", idx);
 	assert(idx < tx->vin_num);
 	retv = tx_sign((char *)buf, buflen, tx, idx, skey);
 
@@ -583,7 +581,6 @@ int tx_trans_end(char *buf, int buflen, ulong64 txptr)
 	struct txrec *tx = (struct txrec *)txptr;
 	int len;
 
-	printf("tx_trans_end, TX in: %d\n", tx->vin_num);
 	len = tx_serialize(buf, buflen, tx, 1);
 	if (len > buflen)
 		len = -1;

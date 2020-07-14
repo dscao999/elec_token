@@ -882,7 +882,7 @@ int main(int argc, char *argv[])
 	intvl.tv_sec = 0;
 	intvl.tv_nsec = 100000000;
 	do {
-		printf("Last block ID: %lu\n", dbinfo->blkdb->blkid);
+		logmsg(LOG_INFO, "Last block ID: %lu\n", dbinfo->blkdb->blkid);
 		retv = wait_for_txs(pipd, &pbtm, dbinfo->mcon);
 		if (retv == 0) {
 			while (tx_service_changed == 0)

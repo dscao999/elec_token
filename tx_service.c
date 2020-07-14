@@ -402,7 +402,6 @@ exit_20:
 	}
 exit_10:
 	txp->wpkt.ptype = suc;
-	printf("Verified Result: %d\n", suc);
 	txp->wpkt.len = SHA_DGST_LEN;
 	sha256_dgst_2str((unsigned char *)txp->wpkt.pkt,
 			(const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
@@ -772,7 +771,6 @@ void *tx_process(void *arg)
 			continue;
 		switch(wif->wpkt.ptype) {
 		case TX_REC:
-			printf("Before Verify\n");
 			verified = txrec_verify(wm->sock, wif, txp);
 			if (verified == 1 && wm->pipd != -1) {
 				if (notify_tx_logging(wm->pipd) == -1)
@@ -835,7 +833,7 @@ int tx_recv(int port, struct wcomm *wm)
 		return -errno;
 	}
 	sin_addr = (struct sockaddr_in *)resaddr->ai_addr;
-	printf("Port number: %d\n", (int)ntohs(sin_addr->sin_port));
+	logmsg(LOG_INFO, "Use UDP Port: %d\n", (int)ntohs(sin_addr->sin_port));
 	sysret = bind(sd, resaddr->ai_addr, resaddr->ai_addrlen);
 	if (sysret != 0) {
 		logmsg(LOG_ERR, "bind failed: %s\n", strerror(errno));
