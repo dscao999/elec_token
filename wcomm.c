@@ -76,11 +76,16 @@ err_exit_10:
 void wcomm_signal(struct wcomm *wm)
 {
 	struct timespec tm;
+	int tries = 0;
 
 	tm.tv_sec = 1;
 	tm.tv_nsec = 0;
-	while (wcomm_full(wm))
+	while (wcomm_full(wm)) {
+		if (tries++ % 10 == 0)
+			logmsg(LOG_WARNING, "Too much load comming, " \
+					"Queue Full!");
 		nanosleep(&tm, NULL);
+	}
 	pthread_mutex_lock(&wm->wmtx);
 	wcomm_head_inc(wm);
 	pthread_cond_signal(&wm->wcd);

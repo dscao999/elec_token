@@ -309,7 +309,7 @@ int txdb_con_init(struct txdb_con *txcon)
 		retv = -mysql_stmt_errno(txcon->btm);
 		goto exit_30;
 	}
-	txcon->blkbuf = malloc(MAX_BLKSIZE);
+	txcon->blkbuf = malloc(g_param->mine.max_blksize);
 	if (!check_pointer(txcon->blkbuf)) {
 		retv = -ENOMEM;
 		goto exit_30;
