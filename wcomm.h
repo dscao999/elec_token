@@ -13,6 +13,7 @@ enum TX_TYPE {TX_REC = 1, UTXO_REQ = 2, VEN_REQ = 3, TOKEN_CAT_REQ = 4,
 	TOKEN_ID_REQ = 5};
 
 struct wpacket {
+	ulong64 sid;
 	unsigned int len;
 	unsigned int ptype;
 	char pkt[0];

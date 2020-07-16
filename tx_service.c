@@ -403,6 +403,7 @@ exit_20:
 exit_10:
 	txp->wpkt.ptype = suc;
 	txp->wpkt.len = SHA_DGST_LEN;
+	txp->wpkt.sid = wif->wpkt.sid;
 	sha256_dgst_2str((unsigned char *)txp->wpkt.pkt,
 			(const unsigned char *)wif->wpkt.pkt, wif->wpkt.len);
 	sockaddr = (struct sockaddr_in *)&wif->srcaddr;
@@ -478,6 +479,7 @@ static int utxo_do_query(int sock, const struct winfo *wif,
 	}
 	wpkt->len = len;
 	wpkt->ptype = 1;
+	wpkt->sid = wif->wpkt.sid;
 	sockaddr = (struct sockaddr_in *)&wif->srcaddr;
 	numb = sendto(sock, wpkt, sizeof(struct wpacket)+wpkt->len, 0,
 			(const struct sockaddr *)sockaddr,
@@ -548,6 +550,7 @@ exit_100:
 	len += sizeof(*vid);
 	wpkt->len = len;
 	wpkt->ptype = 1;
+	wpkt->sid = wif->wpkt.sid;
 	sockaddr = (struct sockaddr_in *)&wif->srcaddr;
 	numb = sendto(sock, wpkt, sizeof(struct wpacket)+wpkt->len, 0,
 			(const struct sockaddr *)sockaddr,
@@ -621,6 +624,7 @@ exit_100:
 	len += sizeof(*catid);
 	wpkt->len = len;
 	wpkt->ptype = 1;
+	wpkt->sid = wif->wpkt.sid;
 	sockaddr = (struct sockaddr_in *)&wif->srcaddr;
 	numb = sendto(sock, wpkt, sizeof(struct wpacket)+wpkt->len, 0,
 			(const struct sockaddr *)sockaddr,
@@ -694,6 +698,7 @@ exit_100:
 	len += sizeof(*tokid);
 	wpkt->len = len;
 	wpkt->ptype = 1;
+	wpkt->sid = wif->wpkt.sid;
 	sockaddr = (struct sockaddr_in *)&wif->srcaddr;
 	numb = sendto(sock, wpkt, sizeof(struct wpacket)+wpkt->len, 0,
 			(const struct sockaddr *)sockaddr,
